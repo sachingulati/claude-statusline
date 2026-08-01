@@ -1,0 +1,11 @@
+# Personal config lives in ~/.claude, never in the repo. Guard anyway in case
+# someone copies it into the tree.
+statusline-accounts.json
+usage-cache/
+statusline-hidden
+
+# Editor / OS noise
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
