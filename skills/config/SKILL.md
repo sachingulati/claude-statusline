@@ -47,7 +47,7 @@ Map the request to one or more of these calls, run them, then show the result:
 | work week, e.g. Mon-Fri | `config set pace.workingDays mon-fri` (also takes names like `mon,wed,fri`, or numbers 0 = Sunday … 6 = Saturday) |
 | all seven days | `config set pace.workingDays 0,1,2,3,4,5,6` |
 | how often idle sessions refresh | `config set refreshInterval <seconds>` (minimum 5) |
-| how often other accounts are fetched | `config set refresh.okSeconds <seconds>` (minimum 60) |
+| stop or allow background checks of other accounts | `config set fetch.otherAccounts false` / `true` |
 | text shown while usage is hidden | `config set hidden.marker --stdin` (heredoc) |
 
 ### Templates

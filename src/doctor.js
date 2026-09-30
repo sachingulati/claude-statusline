@@ -7,6 +7,7 @@ const config = require('./config');
 const settings = require('./settings');
 const launcher = require('./launcher');
 const cache = require('./cache');
+const usage = require('./usage');
 const F = require('./format');
 const { normPath } = require('./paths');
 
@@ -80,34 +81,27 @@ function doctor(p, env, opts) {
     problems.forEach(function (x) { out.push(check('display', 'warn', x.message, x.fix)); });
   }
 
-  if (opts.platform === 'darwin') {
-    out.push(check('macos', 'warn', 'macOS keeps Claude tokens in the Keychain, so other accounts cannot be fetched. The active account still shows live numbers.'));
-  }
-
-  config.load(p).accounts.forEach(function (a) {
+  const cfg = config.load(p);
+  const fetching = cfg.fetch.otherAccounts && cfg.accounts.length > 1;
+  cfg.accounts.forEach(function (a) {
     const name = 'Account ' + (a.label || '(default)');
-    const credFile = path.join(a.dir, '.credentials.json');
-    let cred = null;
-    try { cred = JSON.parse(fs.readFileSync(credFile, 'utf8')); } catch (e) { cred = null; }
-    if (!cred) {
-      out.push(check('creds:' + a.key, 'warn', name + ': no credentials at ' + credFile + ' (skipped)',
-        'Log in as that account: CLAUDE_SECURESTORAGE_CONFIG_DIR="' + a.dir + '" claude, then /login'));
-      return;
-    }
-    const exp = cred.claudeAiOauth && cred.claudeAiOauth.expiresAt;
-    if (exp && exp < now) {
-      out.push(check('token:' + a.key, 'info', name + ': access token expired ' + F.formatAge(Math.floor((now - exp) / 1000)) + ' ago; it renews when a session for this account runs'));
-    }
     const c = cache.read(p, a.key);
-    if (!c) out.push(check('cache:' + a.key, 'info', name + ': no cached usage yet'));
-    else if (c.status && c.status !== 'ok') {
-      out.push(check('cache:' + a.key, 'warn',
-        name + ': last refresh failed (' + c.status + '), data from ' + (c.fetched_at != null ? F.formatAge(nowSec - c.fetched_at) + ' ago' : 'never'),
-        c.status === 'auth' ? 'Start a session as this account and /login' : 'It retries automatically'));
+    if (!c || c.fetched_at == null || (!c.five_hour && !c.seven_day)) {
+      out.push(check('usage:' + a.key, 'info', name + ': no usage recorded yet', 'Start a Claude Code session as this account'));
     } else {
-      out.push(check('cache:' + a.key, 'ok', name + ': usage from ' + F.formatAge(nowSec - c.fetched_at) + ' ago'));
+      out.push(check('usage:' + a.key, 'ok', name + ': last recorded ' + F.formatAge(nowSec - c.fetched_at) + ' ago'));
+    }
+    const at = fetching ? cache.readAttempt(p, a.key) : null;
+    if (at && at.ok === false && at.at != null) {
+      out.push(check('fetch:' + a.key, 'info', name + ': last background check failed ' + F.formatAge(nowSec - at.at) + ' ago; it retries hourly'));
     }
   });
+  if (fetching) {
+    const cmd = usage.command(env, opts.platform);
+    out.push(cmd ? check('claude', 'ok', 'Claude Code found: ' + cmd.path)
+      : check('claude', 'warn', 'Claude Code not found on PATH: other accounts show recorded numbers only',
+        'Put claude on PATH, or turn background checks off: /sline:config fetch.otherAccounts false'));
+  }
 
   out.push(check('hidden', 'info', fs.existsSync(p.hiddenFlag) ? 'Usage is hidden (/sline:usage show brings it back)' : 'Usage is visible'));
   return out;

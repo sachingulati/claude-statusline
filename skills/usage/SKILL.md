@@ -16,7 +16,7 @@ node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js" usage $ARGUMENTS --json
 | (none) | report the current state; changes nothing |
 | `hide` | hide every account's usage numbers; line 1 (folder, model, context, session tokens) stays |
 | `show` | show usage numbers again |
-| `active` | show only the account this session uses; other accounts aren't fetched |
+| `active` | show only the account this session uses; other accounts are hidden and not checked |
 | `all` | show every account again |
 | `reset` | back to defaults: numbers visible, all accounts |
 

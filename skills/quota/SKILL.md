@@ -9,10 +9,10 @@ Run:
 node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js" quota --json
 ```
 
-Each account in `result` has `label`, `active` (the account this session uses), `fiveHour` (`usedPct`, `resetsAtLocal`), `sevenDay` (`usedPct`, `pacePct`, `resetsAtLocal`), `ageSeconds` and `status`.
+Each account in `result` has `label`, `active` (the account this session uses), `fiveHour` (`usedPct`, `resetsAtLocal`), `sevenDay` (`usedPct`, `pacePct`, `resetsAtLocal`), `ageSeconds` and `status` (`recorded` or `none`).
 
 Answer the user's question directly from this data:
 - `pacePct` is how much of the weekly limit would be used by now at an even rate. `usedPct` above `pacePct` means ahead of pace.
-- For accounts that aren't active, say how old the data is (`ageSeconds`). If `status` isn't `ok`, say the numbers may be out of date (`auth` means that account needs a fresh login).
+- For accounts that aren't active, the numbers are as last recorded by that account's own Claude Code sessions on this machine, or by sline's background check through Claude Code; say how old they are (`ageSeconds`).
 - `null` usage means no data yet for that account.
 - Give times in the user's local time as provided in `resetsAtLocal`.

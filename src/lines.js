@@ -86,7 +86,6 @@ function account(u, now, workingDays, style) {
   const th = style.thresholds;
   const v = {};
   FIELDS.account.forEach(function (k) { v[k] = null; });
-  if (u.status === 'auth') { v.status = { text: 'auth?', role: 'high' }; return v; }
   if (u.status === 'nodata') { v.status = { text: 'usage:--', role: 'dim' }; return v; }
 
   const f = u.five;
@@ -110,12 +109,7 @@ function account(u, now, workingDays, style) {
     v.spend = pctValue(sp.used_percentage, th.spend);
     v['spend.reset'] = resetValue(sp.resets_at, true, now, style, 0, null);
   }
-  if (u.age) {
-    v.age = {
-      text: '(' + F.formatAge(u.age.seconds) + ' ago' + (u.age.failing ? ', stale' : '') + ')',
-      role: u.age.failing ? 'warn' : 'dim',
-    };
-  }
+  if (u.age) v.age = { text: '(' + F.formatAge(u.age.seconds) + ' ago)', role: 'dim' };
   return v;
 }
 
@@ -191,7 +185,7 @@ function sampleLines(display) {
   const active = account({ five: { utilization: 52, resets_at: at(1, 23, 49) }, seven: { utilization: 38, resets_at: week } }, now, days, style);
   const other = account({
     five: { utilization: 29, resets_at: at(2, 1, 0) }, seven: { utilization: 28, resets_at: week },
-    age: { seconds: 180, failing: false },
+    age: { seconds: 180 },
   }, now, days, style);
   const sub = subagent({
     status: 'running', description: 'Review the diff', label: 'Reading fsutil.js', startTime: now - 102000,

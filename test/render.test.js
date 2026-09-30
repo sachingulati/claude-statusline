@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tmpEnv, addCreds, writeJson, writeCache, stripAnsi } = require('./helpers');
+const { tmpEnv, writeJson, writeCache, stripAnsi } = require('./helpers');
 const render = require('../src/render');
 const cache = require('../src/cache');
 
@@ -13,10 +13,8 @@ const NOW_S = NOW / 1000;
 function twoAccounts() {
   const t = tmpEnv();
   const bDir = path.join(t.home, '.creds-b');
-  addCreds(t.p.claudeDir);
-  addCreds(bDir);
   writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: bDir }] });
-  writeCache(t.p, 'B', { status: 'ok', fetched_at: NOW_S - 180, checked_at: NOW_S - 180, next_attempt_at: NOW_S + 1000,
+  writeCache(t.p, 'B', { status: 'ok', fetched_at: NOW_S - 180,
     five_hour: { utilization: 29, resets_at: NOW_S + 3 * 3600 }, seven_day: { utilization: 28, resets_at: NOW_S + 4 * 86400 } });
   const proj = path.join(t.home, 'proj');
   fs.mkdirSync(proj);
@@ -50,7 +48,7 @@ test('two accounts, A active: live line for A, cached line for B', () => {
   } finally { t.cleanup(); }
 });
 
-test('B active via CLAUDE_SECURESTORAGE_CONFIG_DIR; A shown from cache and refreshed when due', () => {
+test('B active; A has no record yet, so it is checked in the background', () => {
   const { t, bDir, proj } = twoAccounts();
   try {
     const spawned = [];
@@ -62,7 +60,7 @@ test('B active via CLAUDE_SECURESTORAGE_CONFIG_DIR; A shown from cache and refre
   } finally { t.cleanup(); }
 });
 
-test('display.otherAccounts false: only the active line, unlabelled, no refresh for others', () => {
+test('display.otherAccounts false: only the active line, unlabelled, nothing checked', () => {
   const { t, proj } = twoAccounts();
   try {
     const raw = JSON.parse(fs.readFileSync(t.p.configFile, 'utf8'));
@@ -77,14 +75,14 @@ test('display.otherAccounts false: only the active line, unlabelled, no refresh 
   } finally { t.cleanup(); }
 });
 
-test('a second configured account without a login: one line, unlabelled', () => {
+test('a configured account that never ran here gets a usage:-- line', () => {
   const t = tmpEnv();
   try {
-    addCreds(t.p.claudeDir);
     writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: '~/.claude' }, { label: 'B', credsDir: '~/.creds-b' }] });
     const out = stripAnsi(render.render(payload(t.home), { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
-    assert.equal(out.length, 2);
-    assert.match(out[1], /^5h: 52%/);
+    assert.equal(out.length, 3);
+    assert.match(out[1], /^\[A\] 5h: 52%/);
+    assert.equal(out[2], '[B] usage:--');
   } finally { t.cleanup(); }
 });
 
@@ -102,7 +100,6 @@ test('hidden: line 1 unchanged, usage lines replaced by the marker; nothing fetc
 test('single default account: no [label] prefix', () => {
   const t = tmpEnv();
   try {
-    addCreds(t.p.claudeDir);
     const out = stripAnsi(render.render(payload(t.home), { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
     assert.match(out[0], /^dir:~ /);
     assert.match(out[1], /^5h: 52%/);
@@ -122,7 +119,6 @@ test('empty or malformed stdin still renders line 1', () => {
 test('spend limit shows on line 2, even without 5h/7d', () => {
   const t = tmpEnv();
   try {
-    addCreds(t.p.claudeDir);
     const p1 = { workspace: { current_dir: t.home }, rate_limits: { spend_limit: { used_percentage: 64, resets_at: NOW_S + 2 * 86400 } } };
     const out = stripAnsi(render.render(p1, { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
     assert.match(out[1], /^spend: 64%, \w{3} \d\d:\d\d$/);
@@ -138,8 +134,6 @@ test('a new login folder registers itself: default becomes A, the new one B', ()
   const t = tmpEnv();
   try {
     const bDir = path.join(t.home, '.creds-b');
-    addCreds(t.p.claudeDir);
-    addCreds(bDir);
     const opts = { env: Object.assign({}, t.env, { CLAUDE_SECURESTORAGE_CONFIG_DIR: bDir }), now: NOW, spawn: () => {} };
     const out = stripAnsi(render.render(payload(t.home), opts)).trimEnd().split('\n');
     assert.deepEqual(JSON.parse(fs.readFileSync(t.p.configFile, 'utf8')).accounts,
@@ -177,8 +171,6 @@ test('a login folder in a non-normal spelling registers once, not on every rende
     const t = tmpEnv();
     try {
       const bDir = path.join(t.home, '.creds-b');
-      addCreds(t.p.claudeDir);
-      addCreds(bDir);
       const opts = { env: Object.assign({}, t.env, { CLAUDE_SECURESTORAGE_CONFIG_DIR: spell(t.home) }), now: NOW, spawn: () => {} };
       let out;
       for (let i = 0; i < 3; i++) out = stripAnsi(render.render(payload(t.home), opts)).trimEnd().split('\n');
@@ -193,8 +185,6 @@ test('a default session is the claudeDir account even when another account is li
   const t = tmpEnv();
   try {
     const bDir = path.join(t.home, '.creds-b');
-    addCreds(t.p.claudeDir);
-    addCreds(bDir);
     writeJson(t.p.configFile, { accounts: [{ label: 'Work', credsDir: '~/.creds-b' }] });
     const out = stripAnsi(render.render(payload(t.home), { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
     assert.match(out[1], /^\[A\] 5h: 52%/);
@@ -233,7 +223,6 @@ test('custom templates, separator and 12h clock reach the status line', () => {
 test('F2: a blank line 1 falls back to the default template, and empty account lines are dropped', () => {
   const t = tmpEnv();
   try {
-    addCreds(t.p.claudeDir);
     writeJson(t.p.configFile, { display: { line1: '[ctx: {ctx}]', account: '[5h: {5h}]' } });
     const p1 = { workspace: { current_dir: t.home }, rate_limits: { spend_limit: { used_percentage: 64, resets_at: NOW_S + 2 * 86400 } } };
     const out = stripAnsi(render.render(p1, { env: t.env, now: NOW, spawn: () => {} }));
@@ -260,5 +249,64 @@ test('a hand-broken template draws the default line with a hint; NO_COLOR drops 
     const out = render.render(payload(proj), { env, now: NOW, spawn: () => {} });
     assert.equal(out.split('\n')[0], 'dir:~/proj · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk  (template error: /sline:doctor)');
     assert.ok(!/\x1b/.test(out));
+  } finally { t.cleanup(); }
+});
+
+test('before the first reply, the active line is its record rolled past a passed reset', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeCache(t.p, 'A', { status: 'ok', fetched_at: NOW_S - 7 * 3600,
+      five_hour: { utilization: 80, resets_at: NOW_S - 3600 }, seven_day: { utilization: 38, resets_at: NOW_S + 4 * 86400 } });
+    const p = payload(proj);
+    delete p.rate_limits;
+    const out = stripAnsi(render.render(p, { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
+    assert.match(out[1], /^\[A\] 5h: 0%, --:-- · 7d: 38%/);
+  } finally { t.cleanup(); }
+});
+
+test('checks: old records of other accounts only, never the active one, not again after an attempt', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const old = { status: 'ok', fetched_at: NOW_S - 3600, five_hour: { utilization: 10, resets_at: NOW_S + 3600 }, seven_day: null };
+    writeCache(t.p, 'A', old);
+    writeCache(t.p, 'B', old);
+    const spawned = [];
+    const opts = { env: t.env, now: NOW, spawn: a => spawned.push([a.key, a.dir]) };
+    const p = payload(proj);
+    delete p.rate_limits; // A before its first reply: drawn from its old record, still not checked
+    render.render(p, opts);
+    assert.deepEqual(spawned, [['B', path.join(t.home, '.creds-b')]]);
+    cache.writeAttempt(t.p, 'B', { at: NOW_S - 60, ok: false });
+    render.render(p, opts);
+    assert.equal(spawned.length, 1);
+  } finally { t.cleanup(); }
+});
+
+test('fetch.otherAccounts false: old records are drawn with their age, never checked', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const raw = JSON.parse(fs.readFileSync(t.p.configFile, 'utf8'));
+    raw.fetch = { otherAccounts: false };
+    writeJson(t.p.configFile, raw);
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: NOW_S - 7200, five_hour: { utilization: 29, resets_at: NOW_S + 3600 }, seven_day: null });
+    const spawned = [];
+    const out = stripAnsi(render.render(payload(proj), { env: t.env, now: NOW, spawn: a => spawned.push(a.key) })).trimEnd().split('\n');
+    assert.match(out[2], /^\[B\] 5h: 29%, .*\(2h0m ago\)$/);
+    assert.deepEqual(spawned, []);
+  } finally { t.cleanup(); }
+});
+
+test('an idle session of the active account neither overwrites nor shows numbers older than the record', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const opts = now => ({ env: t.env, now: now, spawn: () => {} });
+    const stale = payload(proj, { session_id: 'idle-1', cost: { total_api_duration_ms: 9000 } });
+    render.render(stale, opts(NOW)); // its last reply said 52%
+    const busy = payload(proj, { session_id: 'busy-1', cost: { total_api_duration_ms: 100 } });
+    busy.rate_limits.five_hour.used_percentage = 76;
+    render.render(busy, opts(NOW + 5000)); // another session's reply: 76%
+    const out = stripAnsi(render.render(stale, opts(NOW + 30000))).trimEnd().split('\n');
+    assert.match(out[1], /^\[A\] 5h: 76%/);
+    assert.equal(cache.read(t.p, 'A').five_hour.utilization, 76);
   } finally { t.cleanup(); }
 });

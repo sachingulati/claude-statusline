@@ -69,14 +69,13 @@ test('account values follow custom thresholds, pace switch and windows', () => {
 
 test('account values: unknown resets, 12h clock, age and status', () => {
   const { s } = style({ clock: '12h' });
-  const v = L.account({ five: { utilization: 5, resets_at: null }, seven: { utilization: 5, resets_at: null }, age: { seconds: 180, failing: true } }, NOW, ALL, s);
+  const v = L.account({ five: { utilization: 5, resets_at: null }, seven: { utilization: 5, resets_at: null }, age: { seconds: 180 } }, NOW, ALL, s);
   assert.deepEqual(v['5h.reset'], { text: '--:--', role: 'dim' });
   assert.deepEqual(v['7d.pace'], { text: '--%', role: 'dim' });
   assert.deepEqual(v['7d.reset'], { text: '--- --:--', role: 'dim' });
-  assert.deepEqual(v.age, { text: '(3m ago, stale)', role: 'warn' });
-  assert.deepEqual(L.account({ age: { seconds: 60, failing: false } }, NOW, ALL, s).age, { text: '(1m ago)', role: 'dim' });
+  assert.deepEqual(v.age, { text: '(3m ago)', role: 'dim' });
+  assert.deepEqual(L.account({ age: { seconds: 3 * 86400 } }, NOW, ALL, s).age, { text: '(3d ago)', role: 'dim' });
   assert.equal(L.account({ five: { utilization: 5, resets_at: S + 3 * 3600 } }, NOW, ALL, s)['5h.reset'].text, '11:00pm');
-  assert.deepEqual(L.account({ status: 'auth' }, NOW, ALL, s).status, { text: 'auth?', role: 'high' });
   const nd = L.account({ status: 'nodata' }, NOW, ALL, s);
   assert.deepEqual(nd.status, { text: 'usage:--', role: 'dim' });
   assert.equal(nd['5h'], null);

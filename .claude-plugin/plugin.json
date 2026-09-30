@@ -2,7 +2,7 @@
   "name": "sline",
   "displayName": "sline (Claude status line)",
   "description": "A status line with live 5-hour and 7-day rate limits for every Claude account you use, pace-aware weekly usage, and one command to show or hide the usage numbers.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "Sachin Gulati" },
   "homepage": "https://github.com/sachingulati/claude-statusline",
   "repository": "https://github.com/sachingulati/claude-statusline",

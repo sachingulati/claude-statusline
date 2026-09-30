@@ -96,7 +96,7 @@ function cmdUsage() {
 
 function accountsText(list) {
   return list.map(function (a) {
-    return '  ' + (a.label || '(default)').padEnd(10) + a.credsDir + (a.hasCredentials ? '' : '  (no credentials)');
+    return '  ' + (a.label || '(default)').padEnd(10) + a.credsDir + (a.recorded ? '' : '  (no usage recorded yet)');
   }).join('\n');
 }
 

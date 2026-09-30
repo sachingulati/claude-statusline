@@ -2,11 +2,13 @@
 // Builds the status line.
 //
 // Line 1  this session: folder, branch, model, effort, context, tokens (display.line1)
-// Line 2  [active account] 5h, 7d, spend  live from stdin, also written to its cache
-// Line 3+ other accounts from cache, refreshed in the background when due
-//         (display.label + display.account)
+// Line 2  [active account] 5h, 7d, spend  live from stdin, recorded after each reply; an
+//         idle session shows the record once another session has recorded newer figures
+// Line 3+ every other configured account from its record, rolled past any reset; a
+//         record older than 30 minutes is checked in the background through Claude
+//         Code's /usage (display.label + display.account)
 //
-// While <stateDir>/hidden exists, lines 2+ become the hidden marker and nothing is fetched.
+// While <stateDir>/hidden exists, lines 2+ become the hidden marker and nothing is checked.
 // A session whose login folder isn't configured yet registers it here (spec §3a).
 
 const fs = require('fs');
@@ -22,14 +24,13 @@ function isHidden(p) {
   try { return fs.existsSync(p.hiddenFlag); } catch (e) { return false; }
 }
 
-// What an other-account line has to show, from its cache entry.
+// What an other-account line has to show, from its rolled-forward record.
 function otherData(c, nowSec) {
-  if (c && c.status === 'auth') return { status: 'auth' };
-  if (!c || !c.five_hour) return { status: 'nodata' };
+  if (!c || (!c.five_hour && !c.seven_day)) return { status: 'nodata' };
   return {
     five: c.five_hour,
     seven: c.seven_day,
-    age: c.fetched_at != null ? { seconds: nowSec - c.fetched_at, failing: c.status != null && c.status !== 'ok' } : null,
+    age: c.fetched_at != null ? { seconds: nowSec - c.fetched_at } : null,
   };
 }
 
@@ -50,7 +51,7 @@ function render(payload, opts) {
   const env = opts.env || process.env;
   const now = opts.now != null ? opts.now : Date.now();
   const nowSec = Math.floor(now / 1000);
-  const spawn = opts.spawn || function (acct) { cache.spawnRefresh(acct, env); };
+  const spawn = opts.spawn || function (acct) { cache.spawnFetch(acct, env); };
   const p = paths.resolve(env);
   const cfg = loadRegistered(p, env);
   const d = payload && typeof payload === 'object' ? payload : {};
@@ -77,16 +78,11 @@ function render(payload, opts) {
 
 function quotaLines(d, p, cfg, env, now, nowSec, spawn, style) {
   const all = cfg.accounts;
-  const present = accounts.present(all);
-  const activeKey = accounts.activeKey(present, all, paths.loginDir(p, env));
+  const activeKey = accounts.activeKey(all, paths.loginDir(p, env));
   const active = all.find(function (a) { return a.key === activeKey; });
-  const isPresent = function (a) { return present.some(function (x) { return x.key === a.key; }); };
-  const shown = isPresent(active) ? present : present.concat([active]);
-  // Label lines only when more than one account line is actually on screen.
-  const multi = cfg.display.otherAccounts && shown.length > 1;
-
-  const caches = {};
-  shown.forEach(function (a) { caches[a.key] = cache.read(p, a.key); });
+  const others = cfg.display.otherAccounts ? all.filter(function (a) { return a.key !== activeKey; }) : [];
+  // Label lines only when more than one account line is on screen.
+  const multi = others.length > 0;
 
   const rl = d.rate_limits || {};
   const five = rl.five_hour || {};
@@ -94,26 +90,27 @@ function quotaLines(d, p, cfg, env, now, nowSec, spawn, style) {
   // Rate limits appear only after the session's first API response.
   const stdinHasLimits = five.used_percentage != null;
 
-  shown.forEach(function (a) {
-    if (a.key === activeKey) { if (stdinHasLimits) return; }
-    else if (!cfg.display.otherAccounts) return;
-    if (!isPresent(a)) return; // no credentials: nothing to fetch with
-    if (cache.isDue(caches[a.key], nowSec)) spawn(a);
-  });
-
   let fh = five.used_percentage;
   let fhRst = five.resets_at;
   let sd = seven.used_percentage;
   let sdRst = seven.resets_at;
 
+  let rec = cache.read(p, activeKey);
   if (stdinHasLimits) {
-    caches[activeKey] = cache.writeActive(p, activeKey, caches[activeKey], {
+    // An idle session is redrawn with its last reply's limits: recorded only after a reply.
+    const apiMs = d.cost && d.cost.total_api_duration_ms;
+    const session = typeof apiMs === 'number' && d.session_id ? { id: d.session_id, apiMs: apiMs } : null;
+    const s = cache.settleActive(p, activeKey, rec, {
       five: fh != null ? { utilization: fh, resets_at: fhRst != null ? fhRst : null } : null,
       seven: sd != null ? { utilization: sd, resets_at: sdRst != null ? sdRst : null } : null,
-    }, cfg.refresh, nowSec);
+    }, session, nowSec);
+    rec = s.rec;
+    // Another session recorded newer figures since this one's last reply: draw those.
+    if (!s.show) { fh = fhRst = sd = sdRst = null; }
   }
 
-  const ac = caches[activeKey];
+  // Before its first reply the active account shows its record; it is never checked.
+  const ac = cache.rollForward(rec, nowSec);
   if (fh == null && ac && ac.five_hour) { fh = ac.five_hour.utilization; fhRst = ac.five_hour.resets_at; }
   if (sd == null && ac && ac.seven_day) { sd = ac.seven_day.utilization; sdRst = ac.seven_day.resets_at; }
 
@@ -131,12 +128,13 @@ function quotaLines(d, p, cfg, env, now, nowSec, spawn, style) {
   if (live.five || live.seven || live.spend) {
     out.push(L.drawAccount(disp, multi ? active.label : null, L.account(live, now, wd, style), style));
   }
-  if (disp.otherAccounts) {
-    present.forEach(function (a) {
-      if (a.key === activeKey) return;
-      out.push(L.drawAccount(disp, multi ? a.label : null, L.account(otherData(caches[a.key], nowSec), now, wd, style), style));
-    });
-  }
+  others.forEach(function (a) {
+    const r = cache.read(p, a.key);
+    // Old numbers: ask Claude Code in the background; this line shows them meanwhile.
+    if (cfg.fetch.otherAccounts && cache.fetchDue(p, a.key, r, nowSec)) spawn(a);
+    const c = cache.rollForward(r, nowSec);
+    out.push(L.drawAccount(disp, multi ? a.label : null, L.account(otherData(c, nowSec), now, wd, style), style));
+  });
   return out;
 }
 

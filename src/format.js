@@ -76,7 +76,9 @@ function formatAge(s) {
   if (s < 60) return s + 's';
   const m = Math.floor(s / 60);
   if (m < 60) return m + 'm';
-  return Math.floor(m / 60) + 'h' + (m % 60) + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h' + (m % 60) + 'm';
+  return Math.floor(h / 24) + 'd' + (h % 24 ? (h % 24) + 'h' : '');
 }
 
 // 34s, 1m42s, 1h05m: how long something has been running.

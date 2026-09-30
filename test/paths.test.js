@@ -13,6 +13,8 @@ test('defaults to <home>/.claude/sline', () => {
   assert.equal(p.rootFile, path.join(p.stateDir, 'root'));
   assert.equal(p.configFile, path.join(p.stateDir, 'config.json'));
   assert.equal(p.cacheDir, path.join(p.stateDir, 'cache'));
+  assert.equal(p.accountsDir, path.join(p.stateDir, 'accounts'));
+  assert.equal(p.sessionsDir, path.join(p.stateDir, 'sessions'));
   assert.equal(p.hiddenFlag, path.join(p.stateDir, 'hidden'));
   assert.equal(p.installFile, path.join(p.stateDir, 'install.json'));
 });

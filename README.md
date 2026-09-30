@@ -1,8 +1,9 @@
 # sline — Claude status line
 
-A [Claude Code](https://claude.com/claude-code) plugin that shows **live rate limits for every
-Claude account you use** in the status line, a pace-aware weekly figure, and one command to show or
-hide the usage numbers.
+A [Claude Code](https://claude.com/claude-code) plugin that shows **rate limits for every Claude
+account you use** in the status line: live for this session's account, and as last recorded or
+checked for your others, a pace-aware weekly figure, and one command to show or hide the usage
+numbers.
 
 ```
 dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk
@@ -12,7 +13,8 @@ dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · sessio
 
 - **Line 1**: folder and git branch, model, effort, context used, this session's tokens.
 - **Line 2**: the account this session uses, live from Claude Code.
-- **Line 3+**: your other accounts, fetched in the background and cached.
+- **Line 3+**: your other accounts, as last recorded by their own sessions on this machine, or
+  checked through Claude Code in the background when those numbers are more than 30 minutes old.
 
 The `[A]` / `[B]` labels appear only when more than one account line is on screen. Hiding usage
 (`/sline:usage hide`) replaces lines 2+ with a dim `hidden`; line 1 stays as it is.
@@ -28,8 +30,9 @@ then its own stats:
 
 - Claude Code with a claude.ai Pro or Max login (rate limits only exist for subscriptions).
 - **Node.js 18 or later** on `PATH`. Nothing else: no bash, git or npm packages.
-- Other accounts are read from `<login folder>/.credentials.json`, which Claude Code writes on
-  Windows and Linux. On macOS the token lives in the Keychain, so only the active account shows.
+- Other accounts appear once a Claude Code session has run as that account on this machine, or
+  once a background check through Claude Code (`claude` on `PATH`) succeeds; until then their
+  line shows `usage:--`.
 
 ## Install
 
@@ -120,8 +123,9 @@ The status line detects which account a session uses from the same variable.
   (the pace). Above pace turns orange. The reset time turns orange in its last 48 hours.
 - **`spend: 64%, Thu 00:00`**: only behind a Claude apps gateway with a spend limit: how much of
   it is used and when it resets. Orange above 75%, and past 100% once exceeded.
-- **`(3m ago)`**: age of a background-fetched line. A yellow `stale` means refreshes are failing,
-  not merely old. `auth?` means that account needs a fresh `/login`.
+- **`(3h ago)`**: when that account's numbers were last recorded by its own session or checked
+  through Claude Code. After a reset time passes the line shows the reset (5h back to 0% with
+  `--:--`, 7d to 0% with the next weekly reset).
 
 ### Work-week pace
 
@@ -145,10 +149,23 @@ changes the expected burn-down.
 - The active account's numbers come from the data Claude Code hands the status line: free and
   instant. They're also saved to its cache, so after you switch accounts it shows where it really
   ended.
-- Other accounts are fetched from `GET /api/oauth/usage` (the endpoint `/usage` uses; it does not
-  consume quota) by a detached background process. The status line never waits on the network.
-- `refreshInterval` makes idle sessions redraw every 30 s. Without it Claude Code only redraws
-  after a reply, and an idle session would keep showing other accounts' old numbers.
+- Each session saves its own account's numbers, but only after a reply: Claude Code redraws an
+  idle session with the numbers from its last reply, and those must not overwrite newer ones
+  from another session. A session tells a reply from a redraw by the API time in Claude Code's
+  data, which grows only with replies; it keeps that total in `~/.claude/sline/sessions/`.
+  An idle session whose account has newer numbers on record shows those instead of its own.
+  Your other sessions' status lines read them too.
+- When another account's numbers are more than 30 minutes old, the status line starts a
+  background check and keeps drawing the old numbers meanwhile. The check runs Claude Code's
+  own `/usage` for that account: `claude -p /usage --no-session-persistence --output-format
+  stream-json --verbose`, with `CLAUDE_SECURESTORAGE_CONFIG_DIR` set to the account's login
+  folder and `CLAUDE_CONFIG_DIR` set to a folder of its own under `~/.claude/sline/accounts/`
+  (Claude Code keeps an account's identity and its `/usage` cache in its config folder). It
+  uses no model turns and no quota. One check per account at a time; not again for 30
+  minutes after one that worked, 60 after one that didn't. `/sline:config fetch.otherAccounts
+  false` turns checks off.
+- `refreshInterval` makes idle sessions redraw every 30 s, so numbers another session records,
+  a finished check, or a reset passing show up without a reply.
 
 Files, all under `~/.claude/sline/` (or `$CLAUDE_CONFIG_DIR/sline/`):
 
@@ -156,15 +173,21 @@ Files, all under `~/.claude/sline/` (or `$CLAUDE_CONFIG_DIR/sline/`):
 |---|---|
 | `launch.js`, `root` | launcher and plugin pointer |
 | `config.json` | accounts and settings |
-| `cache/*.json` | usage per account (percentages and reset times only, no tokens) |
+| `cache/*.json` | usage per account as last recorded or checked (percentages and reset times only) |
+| `cache/*.attempt.json` | when each account was last checked, and whether it worked |
+| `sessions/<id>.json` | each session's API time at its last reply, to tell replies from redraws; removed after 2 days untouched |
+| `accounts/<label>/` | Claude Code's config folder for that account's checks (no login in it) |
 | `hidden` | present while usage is hidden |
 | `install.json` | your previous status line and subagent rows, for uninstall |
 
 ## Privacy and security
 
-- Tokens are read, never written or refreshed, and only sent to Anthropic's own API.
-- `/api/oauth/usage` is undocumented and may change; if it does, the affected line shows
-  `usage:--` and the rest keeps working.
+- sline reads no credentials and makes no network calls itself. The status line uses the data
+  Claude Code hands it and saves percentages and reset times per account under
+  `~/.claude/sline/`.
+- For background checks it runs Claude Code's `/usage` under your other logins, and Claude
+  Code contacts Anthropic as it always does. `/sline:config fetch.otherAccounts false` turns
+  that off.
 
 ## Development
 

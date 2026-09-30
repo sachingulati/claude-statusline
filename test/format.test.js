@@ -28,6 +28,8 @@ test('formatTokens and formatAge', () => {
   assert.equal(F.formatAge(42), '42s');
   assert.equal(F.formatAge(180), '3m');
   assert.equal(F.formatAge(3 * 3600 + 5 * 60), '3h5m');
+  assert.equal(F.formatAge(3 * 86400), '3d');
+  assert.equal(F.formatAge(26 * 3600 + 10 * 60), '1d2h');
 });
 
 test('displayPath shows ~ for home and below, in any slash or drive form', () => {

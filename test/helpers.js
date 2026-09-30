@@ -23,12 +23,6 @@ function writeJson(file, obj) {
   fs.writeFileSync(file, JSON.stringify(obj));
 }
 
-function addCreds(dir, extra) {
-  writeJson(path.join(dir, '.credentials.json'), {
-    claudeAiOauth: Object.assign({ accessToken: 'test-token', expiresAt: Date.now() + 3600e3 }, extra || {}),
-  });
-}
-
 function writeCache(p, key, obj) { writeJson(path.join(p.cacheDir, key + '.json'), Object.assign({ key }, obj)); }
 
-module.exports = { tmpEnv, stripAnsi, writeJson, addCreds, writeCache };
+module.exports = { tmpEnv, stripAnsi, writeJson, writeCache };

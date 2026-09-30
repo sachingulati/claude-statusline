@@ -1,5 +1,5 @@
 'use strict';
-// config.json: accounts, display, pace, refresh cadence, hidden marker.
+// config.json: accounts, display, pace, background checks, hidden marker.
 //
 // load() is used by the status line and must never throw: a broken file falls back
 // to defaults. The CLI uses readRaw()/set(), which refuse to overwrite a broken file.
@@ -11,15 +11,8 @@ const { UserError, readJson, writeJsonAtomic } = require('./fsutil');
 const T = require('./template');
 const F = require('./format');
 const L = require('./lines');
+const cache = require('./cache');
 
-// Deliberately long: normally only one account is active at a time, so the others'
-// quota is essentially frozen. A rolled-over window forces an early refresh anyway.
-const DEFAULT_REFRESH = {
-  okSeconds: 1800,
-  idleSeconds: 3600,
-  errorSeconds: 240,
-  rateLimitedSeconds: 1800,
-};
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
 function slug(s) {
@@ -59,16 +52,10 @@ function normalize(raw, p) {
 
   // A hand-edited value that doesn't parse falls back to its default, as `config set` would refuse it.
   const workingDays = tryParse('pace.workingDays', raw.pace && raw.pace.workingDays) || ALL_DAYS;
-  const rawRefresh = raw.refresh && typeof raw.refresh === 'object' ? raw.refresh : {};
-  const refresh = Object.assign({}, DEFAULT_REFRESH, rawRefresh);
-  Object.keys(DEFAULT_REFRESH).forEach(function (k) {
-    const v = tryParse('refresh.' + k, rawRefresh[k]);
-    refresh[k] = v !== undefined ? v : DEFAULT_REFRESH[k];
-  });
-
   return {
     accounts: accounts,
-    refresh: refresh,
+    // Only a real false turns checks off; a missing or unparsable value keeps the default.
+    fetch: { otherAccounts: tryParse('fetch.otherAccounts', raw.fetch && raw.fetch.otherAccounts) !== false },
     pace: { workingDays: workingDays },
     display: normalizeDisplay(raw),
     hiddenMarker: raw.hidden && raw.hidden.marker != null ? String(raw.hidden.marker) : 'hidden',
@@ -176,16 +163,6 @@ function parseDays(v) {
   return Array.from(new Set(days)).sort(function (a, b) { return a - b; });
 }
 
-function intMin(min) {
-  return function (v) {
-    const n = wholeNumber(v);
-    if (!Number.isInteger(n) || n < min) {
-      throw new UserError('Expected a whole number of seconds >= ' + min + ', got "' + v + '"');
-    }
-    return n;
-  };
-}
-
 function templateKey(which) {
   return function (v) {
     const e = T.check(v, L.FIELDS[which]);
@@ -235,11 +212,8 @@ function parseClock(v) {
 
 const KEYS = {
   'display.otherAccounts': { parse: parseBool, def: true },
+  'fetch.otherAccounts': { parse: parseBool, def: true },
   'pace.workingDays': { parse: parseDays, def: ALL_DAYS },
-  'refresh.okSeconds': { parse: intMin(60), def: DEFAULT_REFRESH.okSeconds },
-  'refresh.idleSeconds': { parse: intMin(60), def: DEFAULT_REFRESH.idleSeconds },
-  'refresh.errorSeconds': { parse: intMin(30), def: DEFAULT_REFRESH.errorSeconds },
-  'refresh.rateLimitedSeconds': { parse: intMin(60), def: DEFAULT_REFRESH.rateLimitedSeconds },
   'hidden.marker': { parse: String, def: 'hidden' },
   'display.line1': { parse: templateKey('line1'), def: L.DEFAULT_TEMPLATES.line1 },
   'display.label': { parse: templateKey('label'), def: L.DEFAULT_TEMPLATES.label },
@@ -287,7 +261,7 @@ function set(p, key, value) {
 
 function listAccounts(p) {
   return normalize(readRaw(p), p).accounts.map(function (a) {
-    return { label: a.label, credsDir: a.dir, hasCredentials: fs.existsSync(path.join(a.dir, '.credentials.json')) };
+    return { label: a.label, credsDir: a.dir, recorded: cache.read(p, a.key) != null };
   });
 }
 
@@ -339,9 +313,8 @@ function addAccount(p, label, credsDir) {
     raw.ignoredDirs = raw.ignoredDirs.filter(function (d) { return normPath(expandHome(d, p.home)) !== normPath(dir); });
   }
   writeJsonAtomic(p.configFile, raw);
-  const warning = fs.existsSync(path.join(dir, '.credentials.json')) ? ''
-    : 'No .credentials.json in ' + dir + ' yet. Log in as that account: CLAUDE_SECURESTORAGE_CONFIG_DIR="' +
-      toForward(dir) + '" claude, then /login';
+  const warning = cache.read(p, slug(label)) != null ? ''
+    : 'Its line fills in after its first Claude Code session on this machine, or the next background check.';
   return { label: label, credsDir: credsDir, warning: warning };
 }
 
@@ -362,8 +335,12 @@ function renameAccount(p, label, newLabel) {
   }
   f.list[f.i].label = newLabel;
   writeJsonAtomic(p.configFile, raw);
-  // The cache file is named after the label; carry the numbers over.
-  try { fs.renameSync(path.join(p.cacheDir, slug(label) + '.json'), path.join(p.cacheDir, slug(newLabel) + '.json')); } catch (e) { /* no cache yet */ }
+  // Record, last check and Claude Code folder are named after the label; carry them over.
+  [[cache.file(p, slug(label)), cache.file(p, slug(newLabel))],
+    [cache.attemptFile(p, slug(label)), cache.attemptFile(p, slug(newLabel))],
+    [cache.accountDir(p, slug(label)), cache.accountDir(p, slug(newLabel))]].forEach(function (m) {
+    try { fs.renameSync(m[0], m[1]); } catch (e) { /* nothing there yet */ }
+  });
   return { label: String(label), newLabel: newLabel };
 }
 
@@ -380,6 +357,8 @@ function forgetAccount(p, label) {
   }
   raw.ignoredDirs = ignored;
   writeJsonAtomic(p.configFile, raw);
+  // Claude Code's folder for this account's checks; its record stays, as before.
+  try { fs.rmSync(cache.accountDir(p, slug(label)), { recursive: true, force: true }); } catch (e) { /* none */ }
   return { label: String(label), credsDir: credsDir };
 }
 
@@ -438,6 +417,6 @@ function registerFolder(p, dir) {
 }
 
 module.exports = {
-  DEFAULT_REFRESH, KEYS, slug, readRaw, normalize, load, set, show, resetDisplay,
+  KEYS, slug, readRaw, normalize, load, set, show, resetDisplay,
   listAccounts, addAccount, renameAccount, forgetAccount, knows, registerFolder,
 };

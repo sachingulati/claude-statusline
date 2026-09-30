@@ -77,7 +77,8 @@ test('config show/set/account and refreshInterval', () => {
     assert.equal(sl(t, ['config', 'set', 'refreshInterval', '60', '--json']).json.result.refreshInterval, 60);
     sl(t, ['config', 'account', 'add', 'A', '~/.claude']);
     const add = sl(t, ['config', 'account', 'add', 'B', '~/.creds-b', '--json']);
-    assert.match(add.json.result.warning, /No \.credentials\.json/);
+    assert.match(add.json.result.warning, /first Claude Code session/);
+    assert.equal(sl(t, ['config', 'set', 'fetch.otherAccounts', 'false', '--json']).json.result.value, false);
     const show = sl(t, ['config', 'show', '--json']).json.result;
     assert.deepEqual(show.rows.find(r => r.key === 'refreshInterval'), { key: 'refreshInterval', value: 60, origin: 'settings.json' });
     assert.deepEqual(show.accounts.map(a => a.label), ['A', 'B']);

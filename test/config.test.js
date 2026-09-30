@@ -3,8 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tmpEnv, addCreds, writeJson } = require('./helpers');
+const { tmpEnv, writeJson, writeCache } = require('./helpers');
 const config = require('../src/config');
+const cache = require('../src/cache');
 const { UserError } = require('../src/fsutil');
 
 test('zero-config: one unlabelled default account in claudeDir', () => {
@@ -14,7 +15,7 @@ test('zero-config: one unlabelled default account in claudeDir', () => {
     assert.deepEqual(c.accounts, [{ label: '', key: 'default', dir: t.p.claudeDir }]);
     assert.equal(c.display.otherAccounts, true);
     assert.deepEqual(c.pace.workingDays, [0, 1, 2, 3, 4, 5, 6]);
-    assert.equal(c.refresh.okSeconds, 1800);
+    assert.equal(c.fetch.otherAccounts, true);
     assert.equal(c.hiddenMarker, 'hidden');
   } finally { t.cleanup(); }
 });
@@ -45,12 +46,12 @@ test('set validates and round-trips each key', () => {
   try {
     assert.equal(config.set(t.p, 'display.otherAccounts', 'off'), false);
     assert.deepEqual(config.set(t.p, 'pace.workingDays', '5,1,2,3,4'), [1, 2, 3, 4, 5]);
-    assert.equal(config.set(t.p, 'refresh.okSeconds', '900'), 900);
+    assert.equal(config.set(t.p, 'fetch.otherAccounts', 'no'), false);
     assert.equal(config.set(t.p, 'hidden.marker', 'numbers off'), 'numbers off');
     const c = config.load(t.p);
     assert.equal(c.display.otherAccounts, false);
     assert.deepEqual(c.pace.workingDays, [1, 2, 3, 4, 5]);
-    assert.equal(c.refresh.okSeconds, 900);
+    assert.equal(c.fetch.otherAccounts, false);
     assert.equal(c.hiddenMarker, 'numbers off');
   } finally { t.cleanup(); }
 });
@@ -61,17 +62,16 @@ test('set rejects unknown keys and bad values', () => {
     assert.throws(() => config.set(t.p, 'nope', '1'), /Unknown setting/);
     assert.throws(() => config.set(t.p, 'display.otherAccounts', 'maybe'), /true or false/);
     assert.throws(() => config.set(t.p, 'pace.workingDays', '1,9'), /0-6/);
-    assert.throws(() => config.set(t.p, 'refresh.okSeconds', '10'), />= 60/);
-    assert.throws(() => config.set(t.p, 'refresh.errorSeconds', '29'), />= 30/);
+    assert.throws(() => config.set(t.p, 'refresh.okSeconds', '900'), /Unknown setting/);
   } finally { t.cleanup(); }
 });
 
 test('show reports origin per key', () => {
   const t = tmpEnv();
   try {
-    config.set(t.p, 'refresh.okSeconds', '900');
+    config.set(t.p, 'fetch.otherAccounts', 'off');
     const rows = config.show(t.p).rows;
-    assert.deepEqual(rows.find(r => r.key === 'refresh.okSeconds'), { key: 'refresh.okSeconds', value: 900, origin: 'config.json' });
+    assert.deepEqual(rows.find(r => r.key === 'fetch.otherAccounts'), { key: 'fetch.otherAccounts', value: false, origin: 'config.json' });
     assert.deepEqual(rows.find(r => r.key === 'hidden.marker'), { key: 'hidden.marker', value: 'hidden', origin: 'default' });
   } finally { t.cleanup(); }
 });
@@ -79,12 +79,12 @@ test('show reports origin per key', () => {
 test('account add/rename/forget/list', () => {
   const t = tmpEnv();
   try {
-    addCreds(t.p.claudeDir);
+    writeCache(t.p, 'A', { status: 'ok', fetched_at: 1, five_hour: { utilization: 1, resets_at: null } });
     assert.equal(config.addAccount(t.p, 'A', '~/.claude').warning, '');
     const b = config.addAccount(t.p, 'B', '~/.creds-b');
-    assert.match(b.warning, /No \.credentials\.json/);
+    assert.match(b.warning, /first Claude Code session/);
     assert.throws(() => config.addAccount(t.p, 'A', '~/x'), /already exists/);
-    assert.deepEqual(config.listAccounts(t.p).map(a => [a.label, a.hasCredentials]), [['A', true], ['B', false]]);
+    assert.deepEqual(config.listAccounts(t.p).map(a => [a.label, a.recorded]), [['A', true], ['B', false]]);
 
     writeJson(path.join(t.p.cacheDir, 'B.json'), { key: 'B' });
     assert.deepEqual(config.renameAccount(t.p, 'B', 'Work'), { label: 'B', newLabel: 'Work' });
@@ -275,21 +275,19 @@ test('hand-edited values that do not parse fall back to defaults, and show says 
   try {
     writeJson(t.p.configFile, {
       display: { thresholds: { ctx: ['', ''], '5hResetSoon': [5] }, otherAccounts: 'no' },
-      refresh: { okSeconds: 'abc', idleSeconds: '120' },
+      fetch: { otherAccounts: 'maybe' },
       pace: { workingDays: ['', 'mon'] },
     });
     const cfg = config.load(t.p);
     assert.deepEqual(cfg.display.thresholds.ctx, config.KEYS['display.thresholds.ctx'].def);
     assert.equal(cfg.display.thresholds['5hResetSoon'], config.KEYS['display.thresholds.5hResetSoon'].def);
     assert.equal(cfg.display.otherAccounts, false);
-    assert.equal(cfg.refresh.okSeconds, config.DEFAULT_REFRESH.okSeconds);
-    assert.equal(cfg.refresh.idleSeconds, 120);
+    assert.equal(cfg.fetch.otherAccounts, true);
     assert.deepEqual(cfg.pace.workingDays, [0, 1, 2, 3, 4, 5, 6]);
     const rows = config.show(t.p).rows;
     const ctx = rows.find(r => r.key === 'display.thresholds.ctx');
     assert.deepEqual(ctx.value, config.KEYS['display.thresholds.ctx'].def);
     assert.match(ctx.origin, /^default, config.json has invalid \["",""\]$/);
-    assert.deepEqual(rows.find(r => r.key === 'refresh.idleSeconds'), { key: 'refresh.idleSeconds', value: 120, origin: 'config.json' });
     assert.equal(rows.find(r => r.key === 'display.otherAccounts').value, false);
   } finally { t.cleanup(); }
 });
@@ -321,9 +319,52 @@ test('number settings refuse blanks, booleans, arrays and fractions', () => {
   assert.deepEqual(pair('30, 75'), [30, 75]);
   assert.throws(() => pair(['', '']), /two whole numbers/);
   assert.throws(() => pair('30.5,75'), /two whole numbers/);
-  const secs = config.KEYS['refresh.okSeconds'].parse;
-  assert.equal(secs('600'), 600);
-  [true, '', [900], 90.5].forEach(v => assert.throws(() => secs(v), /whole number/));
+  const mins = config.KEYS['display.thresholds.5hResetSoon'].parse;
+  assert.equal(mins('600'), 600);
+  [true, '', [900], 90.5].forEach(v => assert.throws(() => mins(v)));
+});
+
+test('old refresh settings load quietly and cannot be set; fetch is not a display setting', () => {
+  const t = tmpEnv();
+  try {
+    writeJson(t.p.configFile, { refresh: { okSeconds: 900 }, fetch: { otherAccounts: false } });
+    const cfg = config.load(t.p);
+    assert.equal(cfg.refresh, undefined);
+    assert.deepEqual(cfg.display.problems, []);
+    assert.equal(config.show(t.p).rows.some(r => r.key.startsWith('refresh.')), false);
+    config.resetDisplay(t.p);
+    assert.equal(config.load(t.p).fetch.otherAccounts, false);
+  } finally { t.cleanup(); }
+});
+
+test('rename carries record, last check and Claude Code folder; forget deletes only the folder', () => {
+  const t = tmpEnv();
+  try {
+    config.addAccount(t.p, 'A', '~/.claude');
+    config.addAccount(t.p, 'B', '~/.creds-b');
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: 1 });
+    cache.writeAttempt(t.p, 'B', { at: 1, ok: false });
+    fs.mkdirSync(path.join(cache.accountDir(t.p, 'B'), 'plugins'), { recursive: true });
+    config.renameAccount(t.p, 'B', 'Work');
+    assert.ok(fs.existsSync(cache.file(t.p, 'Work')));
+    assert.ok(fs.existsSync(cache.attemptFile(t.p, 'Work')));
+    assert.ok(fs.existsSync(path.join(cache.accountDir(t.p, 'Work'), 'plugins')));
+    assert.equal(fs.existsSync(cache.accountDir(t.p, 'B')), false);
+    config.forgetAccount(t.p, 'Work');
+    assert.equal(fs.existsSync(cache.accountDir(t.p, 'Work')), false);
+    assert.ok(fs.existsSync(t.p.accountsDir));
+    assert.ok(fs.existsSync(t.p.configFile));
+  } finally { t.cleanup(); }
+});
+
+test('forgetting an account labelled ".." deletes nothing outside the accounts folder', () => {
+  const t = tmpEnv();
+  try {
+    config.addAccount(t.p, '..', '~/.creds-x');
+    config.forgetAccount(t.p, '..');
+    assert.ok(fs.existsSync(t.p.configFile));
+    assert.ok(fs.existsSync(t.p.stateDir));
+  } finally { t.cleanup(); }
 });
 
 test('a config.json holding null or an array is refused by the CLI and ignored by the status line', () => {

@@ -49,6 +49,8 @@ function resolve(env) {
     rootFile: path.join(stateDir, 'root'),
     configFile: path.join(stateDir, 'config.json'),
     cacheDir: path.join(stateDir, 'cache'),
+    accountsDir: path.join(stateDir, 'accounts'),
+    sessionsDir: path.join(stateDir, 'sessions'),
     hiddenFlag: path.join(stateDir, 'hidden'),
     installFile: path.join(stateDir, 'install.json'),
   };

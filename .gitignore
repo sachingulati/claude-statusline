@@ -9,3 +9,6 @@ Thumbs.db
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Design specs and plans stay local
+docs/
