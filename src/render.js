@@ -30,7 +30,9 @@ function otherData(c, nowSec) {
   return {
     five: c.five_hour,
     seven: c.seven_day,
-    age: c.fetched_at != null ? { seconds: nowSec - c.fetched_at } : null,
+    scoped: c.scoped,
+    // A time from a clock that jumped back says nothing about the age.
+    age: c.fetched_at != null && c.fetched_at <= nowSec + cache.FUTURE ? { seconds: Math.max(0, nowSec - c.fetched_at) } : null,
   };
 }
 
@@ -51,7 +53,7 @@ function render(payload, opts) {
   const env = opts.env || process.env;
   const now = opts.now != null ? opts.now : Date.now();
   const nowSec = Math.floor(now / 1000);
-  const spawn = opts.spawn || function (acct) { cache.spawnFetch(acct, env); };
+  const spawn = opts.spawn || function (acct, mode) { cache.spawnFetch(acct, env, mode); };
   const p = paths.resolve(env);
   const cfg = loadRegistered(p, env);
   const d = payload && typeof payload === 'object' ? payload : {};
@@ -60,16 +62,21 @@ function render(payload, opts) {
   const disp = cfg.display;
   const style = F.makeStyle(disp, env);
   const cwd = (d.workspace && d.workspace.current_dir) || d.cwd || process.cwd();
-  const v1 = L.line1(d, cwd, p.home, git.branch(cwd), style);
-  const line1 = L.drawLine(disp.templates.line1, v1, style, disp.separator);
+  const hidden = isHidden(p);
+  // Hiding usage covers the usage fields a line 1 template can name, too.
+  const d1 = hidden && d.rate_limits !== undefined ? Object.assign({}, d, { rate_limits: undefined }) : d;
+  const v1 = L.withPassThrough(L.line1(d, cwd, p.home, git.branch(cwd), style), d1, disp.templates.line1.parts, now, style.clock);
+  const width = L.lineWidth(disp, env);
+  const line1 = L.fitLine1(width, disp.templates.line1, v1, style, disp.separator);
   // A valid template can still render blank for this payload; the status line always needs a line 1.
-  lines.push(line1 === '' ? L.drawLine(L.defaultDisplay().templates.line1, v1, style, disp.separator) : line1);
+  lines.push(line1 === '' ? L.fitLine1(width, L.defaultDisplay().templates.line1, v1, style, disp.separator) : line1);
 
   // Hiding covers account usage only; line 1 is about this session and stays.
-  if (isHidden(p)) {
+  if (hidden) {
     if (cfg.hiddenMarker) lines.push(F.paint(style, 'dim', cfg.hiddenMarker));
   } else {
-    quotaLines(d, p, cfg, env, now, nowSec, spawn, style).forEach(function (l) { if (l !== '') lines.push(l); });
+    L.fitAccounts(width, disp, quotaLines(d, p, cfg, env, now, nowSec, spawn, style), style)
+      .forEach(function (l) { if (l !== '') lines.push(l); });
   }
 
   if (env.RECAP) lines.push(env.RECAP);
@@ -88,12 +95,11 @@ function quotaLines(d, p, cfg, env, now, nowSec, spawn, style) {
   const five = rl.five_hour || {};
   const seven = rl.seven_day || {};
   // Rate limits appear only after the session's first API response.
-  const stdinHasLimits = five.used_percentage != null;
-
-  let fh = five.used_percentage;
+  let fh = F.cleanPct(five.used_percentage, 100);
   let fhRst = five.resets_at;
-  let sd = seven.used_percentage;
+  let sd = F.cleanPct(seven.used_percentage, 100);
   let sdRst = seven.resets_at;
+  const stdinHasLimits = fh != null;
 
   let rec = cache.read(p, activeKey);
   if (stdinHasLimits) {
@@ -109,31 +115,40 @@ function quotaLines(d, p, cfg, env, now, nowSec, spawn, style) {
     if (!s.show) { fh = fhRst = sd = sdRst = null; }
   }
 
-  // Before its first reply the active account shows its record; it is never checked.
+  // Per-model rows never reach the status line's JSON: only if the template shows them is
+  // the active account checked too, on the same 30-minute pacing.
+  if (active && cfg.fetch.otherAccounts && L.usesModel(cfg.display.templates.account) &&
+      cache.checkDue(p, activeKey, rec, nowSec)) {
+    spawn(active, 'scoped');
+  }
+
+  // Before its first reply the active account shows its record.
   const ac = cache.rollForward(rec, nowSec);
   if (fh == null && ac && ac.five_hour) { fh = ac.five_hour.utilization; fhRst = ac.five_hour.resets_at; }
   if (sd == null && ac && ac.seven_day) { sd = ac.seven_day.utilization; sdRst = ac.seven_day.resets_at; }
 
-  const disp = cfg.display;
   const wd = cfg.pace.workingDays;
   // Behind a Claude apps gateway the payload can carry a spend limit, possibly without 5h/7d.
-  const spend = rl.spend_limit && rl.spend_limit.used_percentage != null ? rl.spend_limit : null;
+  // Spending can pass 100%, so only nonsense is dropped.
+  const spendPct = rl.spend_limit ? F.cleanPct(rl.spend_limit.used_percentage, Infinity) : null;
+  const spend = spendPct != null ? Object.assign({}, rl.spend_limit, { used_percentage: spendPct }) : null;
   const live = {
     five: fh != null ? { utilization: fh, resets_at: fhRst != null ? fhRst : null } : null,
     seven: sd != null ? { utilization: sd, resets_at: sdRst != null ? sdRst : null } : null,
     spend: spend,
+    scoped: ac ? ac.scoped : null,
   };
 
   const out = [];
   if (live.five || live.seven || live.spend) {
-    out.push(L.drawAccount(disp, multi ? active.label : null, L.account(live, now, wd, style), style));
+    out.push({ label: multi ? active.label : null, values: L.account(live, now, wd, style) });
   }
   others.forEach(function (a) {
     const r = cache.read(p, a.key);
     // Old numbers: ask Claude Code in the background; this line shows them meanwhile.
     if (cfg.fetch.otherAccounts && cache.fetchDue(p, a.key, r, nowSec)) spawn(a);
     const c = cache.rollForward(r, nowSec);
-    out.push(L.drawAccount(disp, multi ? a.label : null, L.account(otherData(c, nowSec), now, wd, style), style));
+    out.push({ label: multi ? a.label : null, values: L.account(otherData(c, nowSec), now, wd, style) });
   });
   return out;
 }

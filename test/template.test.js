@@ -83,3 +83,11 @@ test('check refuses unknown fields and lists the valid ones', () => {
 test('fields lists fields at the top level and inside groups', () => {
   assert.deepEqual(T.fields(T.parse('{a}[x{b}]{sep}').parts).map(f => f.name), ['a', 'b']);
 });
+
+test('check accepts a predicate and a hint', () => {
+  assert.equal(T.check('{a.b}', n => n.startsWith('a.'), 'x'), null);
+  const e = T.check('{zz}', n => n === 'a', 'Fields here: a');
+  assert.equal(e.message, 'Unknown field {zz}');
+  assert.equal(e.fix, 'Fields here: a');
+  assert.equal(T.check('{b}', ['a', 'b']), null); // arrays still work
+});

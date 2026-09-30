@@ -70,11 +70,14 @@ function fields(parts) {
   return list;
 }
 
-function check(text, allowed) {
+// allowed: the field names, or a test for one; hint: the fix shown for an unknown field.
+function check(text, allowed, hint) {
   const p = parse(text);
   if (p.error) return p.error;
-  const bad = fields(p.parts).find(function (f) { return allowed.indexOf(f.name) === -1; });
-  return bad ? err('Unknown field {' + bad.name + '}', bad.column, 'Fields here: ' + allowed.join(', ')) : null;
+  const ok = typeof allowed === 'function' ? allowed : function (n) { return allowed.indexOf(n) !== -1; };
+  const bad = fields(p.parts).find(function (f) { return !ok(f.name); });
+  const fix = hint || (Array.isArray(allowed) ? 'Fields here: ' + allowed.join(', ') : 'Use a field name this template accepts');
+  return bad ? err('Unknown field {' + bad.name + '}', bad.column, fix) : null;
 }
 
 // null = empty; a name the caller doesn't know prints as typed so a typo is visible.

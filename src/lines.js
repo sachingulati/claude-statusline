@@ -4,14 +4,18 @@
 
 const T = require('./template');
 const F = require('./format');
+const PT = require('./passthrough');
+const FIT = require('./fit');
 const { toForward } = require('./paths');
+
+const oneLine = F.oneLine;
 
 const HOUR = 3600e3;
 
 const FIELDS = {
   line1: ['dir', 'dir.full', 'dir.name', 'branch', 'model', 'model.name', 'effort', 'ctx', 'session'],
   label: ['label'],
-  account: ['5h', '5h.reset', '7d', '7d.pace', '7d.reset', 'spend', 'spend.reset', 'age', 'status'],
+  account: ['5h', '5h.reset', '5h.pace', '7d', '7d.pace', '7d.reset', '7d.model', '7d.model.reset', 'spend', 'spend.reset', 'age', 'status'],
   subagent: ['type', 'activity', 'model', 'model.name', 'effort', 'ctx', 'tokens', 'elapsed'],
 };
 
@@ -27,7 +31,7 @@ const DEFAULT_DISPLAY = {
   separator: ' · ',
   thresholds: {
     ctx: [30, 65], '5h': [30, 75], '7d': [30, 75], spend: [30, 75],
-    '7dPace': true, '5hResetSoon': 60, '7dResetSoon': 48,
+    '7dPace': true, '5hPace': false, '5hResetSoon': 60, '7dResetSoon': 48,
   },
   colors: { ok: 'green', warn: 'yellow', high: 'orange', dim: 'dim' },
   clock: '24h',
@@ -46,6 +50,7 @@ function defaultDisplay() {
     thresholds: Object.assign({}, DEFAULT_DISPLAY.thresholds),
     colors: Object.assign({}, DEFAULT_DISPLAY.colors),
     clock: DEFAULT_DISPLAY.clock,
+    width: 'auto',
     problems: [],
   };
 }
@@ -76,7 +81,7 @@ function line1(d, cwd, home, branch, style) {
     model: plain(model.id),
     'model.name': plain(model.display_name || (typeof model.id === 'string' && model.id ? modelName(model.id) : null)),
     effort: plain(d.effort && d.effort.level),
-    ctx: cw.used_percentage != null ? pctValue(cw.used_percentage, style.thresholds.ctx) : null,
+    ctx: F.cleanPct(cw.used_percentage, 100) != null ? pctValue(F.cleanPct(cw.used_percentage, 100), style.thresholds.ctx) : null,
     session: cw.total_input_tokens != null && cw.total_output_tokens != null
       ? plain(F.formatTokens(cw.total_input_tokens + cw.total_output_tokens) + 'tk') : null,
   };
@@ -88,9 +93,19 @@ function account(u, now, workingDays, style) {
   FIELDS.account.forEach(function (k) { v[k] = null; });
   if (u.status === 'nodata') { v.status = { text: 'usage:--', role: 'dim' }; return v; }
 
+  // Guard d: right after a reset almost no time has passed, so any use at all looks
+  // "over pace"; judge pace only after a first stretch of the window.
+  const early = function (resetsAt, windowMs, graceMs) {
+    return resetsAt != null && now < resetsAt * 1000 - windowMs + graceMs;
+  };
+
   const f = u.five;
   if (f && f.utilization != null) {
-    v['5h'] = pctValue(f.utilization, th['5h']);
+    const p5 = F.pace5hPct(f.resets_at, now);
+    const val = pctValue(f.utilization, th['5h']);
+    if (th['5hPace'] && p5 != null && Math.round(f.utilization) > p5 && !early(f.resets_at, 5 * HOUR, 30 * 60e3)) val.role = 'high';
+    v['5h'] = val;
+    v['5h.pace'] = p5 != null ? plain(F.pct(Math.round(p5))) : { text: '--%', role: 'dim' };
     // Green: the wait is nearly over.
     v['5h.reset'] = resetValue(f.resets_at, false, now, style, th['5hResetSoon'] * 60e3, 'ok');
   }
@@ -99,10 +114,26 @@ function account(u, now, workingDays, style) {
     const pace = F.pacePct(s.resets_at, now, workingDays);
     const val = pctValue(s.utilization, th['7d']);
     // 7d is judged against pace: 60% is fine on day 6, alarming on day 1.
-    if (th['7dPace'] && pace != null && Math.round(s.utilization) > pace) val.role = 'high';
+    if (th['7dPace'] && pace != null && Math.round(s.utilization) > pace && !early(s.resets_at, 7 * 24 * HOUR, 24 * HOUR)) val.role = 'high';
     v['7d'] = val;
     v['7d.pace'] = pace != null ? plain(F.pct(Math.round(pace))) : { text: '--%', role: 'dim' };
     v['7d.reset'] = resetValue(s.resets_at, true, now, style, th['7dResetSoon'] * HOUR, 'high');
+  }
+  // Per-model weekly windows (Fable on Max): only a background check sees them. Each row
+  // carries its own name, so a new model needs no release.
+  const rows = Array.isArray(u.scoped) ? u.scoped.filter(function (r) {
+    return r && F.oneLine(r.name) && F.cleanPct(r.utilization, 100) != null;
+  }) : [];
+  if (rows.length) {
+    v['7d.model'] = {
+      text: rows.map(function (r) {
+        const pv = pctValue(F.cleanPct(r.utilization, 100), th['7d']);
+        return F.oneLine(r.name) + ' ' + F.paint(style, pv.role, pv.text);
+      }).join(', '),
+      role: null, // each row is painted above
+    };
+    const resets = rows.map(function (r) { return r.resets_at; }).filter(function (x) { return x != null; });
+    v['7d.model.reset'] = resetValue(resets.length ? Math.min.apply(null, resets) : null, true, now, style, 0, null);
   }
   const sp = u.spend;
   if (sp && sp.used_percentage != null) {
@@ -111,14 +142,6 @@ function account(u, now, workingDays, style) {
   }
   if (u.age) v.age = { text: '(' + F.formatAge(u.age.seconds) + ' ago)', role: 'dim' };
   return v;
-}
-
-// One line of plain text: Claude Code's strings can carry newlines, and a stray escape
-// code (7- or 8-bit), bidi override or zero-width character must not reach the terminal.
-function oneLine(s) {
-  return typeof s === 'string'
-    ? s.replace(/[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]+/g, ' ').replace(/\s+/g, ' ').trim()
-    : '';
 }
 
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
@@ -156,18 +179,82 @@ function hint(broken, style) {
   return broken ? '  ' + F.paint(style, 'dim', '(template error: /sline:doctor)') : '';
 }
 
-function drawLine(tpl, values, style, sep) {
-  return T.render(tpl.parts, values, { paint: painter(style), sep: sep }) + hint(tpl.broken, style);
+function drawLine(tpl, values, style, sep, drop) {
+  return T.render(FIT.dropGroups(tpl.parts, drop || 0), values, { paint: painter(style), sep: sep }) + hint(tpl.broken, style);
 }
 
 // The label is its own template so it never counts as "something before" a {sep}.
-function drawAccount(display, label, values, style) {
+function drawAccount(display, label, values, style, drop) {
   const t = display.templates;
   const opts = { paint: painter(style), sep: display.separator };
-  const body = T.render(t.account.parts, values, opts);
+  const body = T.render(FIT.dropGroups(t.account.parts, drop || 0), values, opts);
   if (body === '') return ''; // nothing to show: no bare label, no hint
   const head = label ? T.render(t.label.parts, { label: plain(label) }, opts) : '';
   return head + body + hint(t.label.broken || t.account.broken, style);
+}
+
+// Columns the status line may use: Claude Code passes the terminal's width as COLUMNS; its
+// own indent takes a little. 0 = don't fit (no width known, or fitting is off).
+function lineWidth(display, env) {
+  if (display.width === 'off') return 0;
+  if (typeof display.width === 'number') return display.width;
+  const c = Number(env && env.COLUMNS);
+  return Number.isInteger(c) && c > 2 ? c - 2 : 0;
+}
+
+// Line 1: a shorter folder first (long paths are what overflow), then groups from the
+// right, then a cut.
+function fitLine1(width, tpl, values, style, sep) {
+  let line = drawLine(tpl, values, style, sep, 0);
+  if (!width || F.visibleWidth(line) <= width) return line;
+  const dv = values.dir ? FIT.dirVariants(values.dir.text) : [];
+  const fv = values['dir.full'] ? FIT.dirVariants(values['dir.full'].text) : [];
+  let vals = values;
+  for (let i = 1; i < Math.max(dv.length, fv.length); i++) {
+    vals = Object.assign({}, values);
+    if (dv.length) vals.dir = { text: dv[Math.min(i, dv.length - 1)], role: values.dir.role };
+    if (fv.length) vals['dir.full'] = { text: fv[Math.min(i, fv.length - 1)], role: values['dir.full'].role };
+    line = drawLine(tpl, vals, style, sep, 0);
+    if (F.visibleWidth(line) <= width) return line;
+  }
+  const n = FIT.groupCount(tpl.parts);
+  for (let k = 1; k <= n; k++) {
+    const l = drawLine(tpl, vals, style, sep, k);
+    if (l === '') break;
+    line = l;
+    if (F.visibleWidth(line) <= width) return line;
+  }
+  return FIT.truncate(line, width);
+}
+
+// Account lines drop the same groups so their columns stay aligned; the first group always
+// stays. A usage:-- line (status set) is never dropped from, only cut.
+function fitAccounts(width, display, rows, style) {
+  const n = FIT.groupCount(display.templates.account.parts);
+  let k = 0;
+  if (width) {
+    rows.forEach(function (r) {
+      if (r.values.status) return;
+      let kk = 0;
+      while (kk < n - 1 && F.visibleWidth(drawAccount(display, r.label, r.values, style, kk)) > width) kk++;
+      k = Math.max(k, kk);
+    });
+  }
+  return rows.map(function (r) {
+    // A line whose only groups are among the dropped ones keeps the most it can instead of vanishing.
+    let drop = r.values.status ? 0 : k;
+    let l = drawAccount(display, r.label, r.values, style, drop);
+    while (l === '' && drop > 0) l = drawAccount(display, r.label, r.values, style, --drop);
+    return width ? FIT.truncate(l, width) : l;
+  });
+}
+
+// Line 1 names that aren't sline fields are read from Claude Code's JSON (sline wins a clash).
+function withPassThrough(values, d, parts, now, clock) {
+  const names = T.fields(parts).map(function (f) { return f.name; }).filter(function (n) {
+    return !Object.prototype.hasOwnProperty.call(values, n) && PT.NAME.test(n);
+  });
+  return Object.assign(PT.values(d || {}, names, now, clock), values);
 }
 
 // A fixed example, so /sline:config can show what a change looks like.
@@ -177,11 +264,14 @@ function sampleLines(display) {
   const at = function (day, h, m) { return Math.floor(new Date(2026, 9, day, h, m).getTime() / 1000); };
   const week = at(5, 17, 29); // Mon 17:29
   const days = [0, 1, 2, 3, 4, 5, 6];
-  const l1 = line1({
+  const sample = {
     model: { id: 'claude-opus-5-5', display_name: 'Opus 5.5' },
     effort: { level: 'high' },
     context_window: { used_percentage: 12, total_input_tokens: 300000, total_output_tokens: 40000 },
-  }, '/home/me/projects/app', '/home/me', 'main', style);
+    session_name: 'fix login bug', cost: { total_cost_usd: 1.23, total_duration_ms: 754000 },
+    prompt_cache: { expires_at: Math.floor(now / 1000) + 240 },
+  };
+  const l1 = withPassThrough(line1(sample, '/home/me/projects/app', '/home/me', 'main', style), sample, display.templates.line1.parts, now, display.clock);
   const active = account({ five: { utilization: 52, resets_at: at(1, 23, 49) }, seven: { utilization: 38, resets_at: week } }, now, days, style);
   const other = account({
     five: { utilization: 29, resets_at: at(2, 1, 0) }, seven: { utilization: 28, resets_at: week },
@@ -203,7 +293,13 @@ function sampleLines(display) {
   ]);
 }
 
+// Only an account template that shows per-model rows needs the active account checked.
+function usesModel(tpl) {
+  return T.fields(tpl.parts).some(function (f) { return f.name === '7d.model' || f.name === '7d.model.reset'; });
+}
+
 module.exports = {
-  FIELDS, DEFAULT_TEMPLATES, DEFAULT_DISPLAY, defaultDisplay,
-  line1, account, subagent, modelName, drawLine, drawAccount, sampleLines,
+  usesModel, FIELDS, DEFAULT_TEMPLATES, DEFAULT_DISPLAY, defaultDisplay,
+  line1, account, subagent, modelName, withPassThrough, drawLine, drawAccount, sampleLines,
+  lineWidth, fitLine1, fitAccounts,
 };

@@ -152,3 +152,89 @@ test('spawnFetch starts the runner detached and returns at once', () => {
     assert.equal(cache.read(t.p, 'B').five_hour.utilization, 5);
   } finally { t.cleanup(); }
 });
+
+test('guard c: a lock dated in the future (clock jumped back) is taken over', () => {
+  const { t, env, loginDir } = setup('ok');
+  try {
+    fs.mkdirSync(lockDir(t), { recursive: true });
+    const future = new Date(Date.now() + 3600 * 1000);
+    fs.utimesSync(lockDir(t), future, future);
+    assert.equal(refresh.run('B', loginDir, env), 'ok');
+  } finally { t.cleanup(); }
+});
+
+test('a check records per-model rows and when it ran', () => {
+  const { t, env, loginDir } = setup('scoped');
+  try {
+    const before = Math.floor(Date.now() / 1000);
+    assert.equal(refresh.run('B', loginDir, env), 'ok');
+    const rec = cache.read(t.p, 'B');
+    assert.equal(rec.scoped[0].name, 'Fable');
+    assert.ok(rec.checked_at >= before);
+  } finally { t.cleanup(); }
+});
+
+test('guard a: an empty slot (0%, no reset) does not replace one whose window is still open', () => {
+  const { t, env, loginDir } = setup('ok');
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    // Claude Code answers with an empty 5h row; the stored 81% window is still open.
+    const empty = JSON.stringify({ type: 'assistant', usage_report: { rate_limits: { limits: [
+      { kind: 'session', percent: 0, resets_at: null },
+      { kind: 'weekly_all', percent: 45, resets_at: '2026-10-05T18:00:00Z' },
+    ] } } });
+    const fx = path.join(t.base, 'empty.jsonl');
+    fs.writeFileSync(fx, empty);
+    env.FAKE_CLAUDE_FIXTURE = fx;
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: now - 7200,
+      five_hour: { utilization: 81, resets_at: now + 3600 }, seven_day: null });
+    assert.equal(refresh.run('B', loginDir, env), 'ok');
+    assert.equal(cache.read(t.p, 'B').five_hour.utilization, 81);
+    assert.equal(cache.read(t.p, 'B').seven_day.utilization, 45);
+  } finally { t.cleanup(); }
+});
+
+test('guard a: an empty per-model row (0%, no reset) does not replace one whose window is still open', () => {
+  const { t, env, loginDir } = setup('ok');
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const empty = JSON.stringify({ type: 'assistant', usage_report: { rate_limits: { limits: [
+      { kind: 'session', percent: 5, resets_at: '2026-09-30T21:30:00Z' },
+      { kind: 'weekly_scoped', percent: 0, resets_at: null, scope: { model: { id: null, display_name: 'Fable' }, surface: null } },
+    ] } } });
+    const fx = path.join(t.base, 'empty-scoped.jsonl');
+    fs.writeFileSync(fx, empty);
+    env.FAKE_CLAUDE_FIXTURE = fx;
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: now - 7200, five_hour: null, seven_day: null,
+      scoped: [{ name: 'Fable', utilization: 42, resets_at: now + 86400 }] });
+    assert.equal(refresh.run('B', loginDir, env), 'ok');
+    assert.deepEqual(cache.read(t.p, 'B').scoped, [{ name: 'Fable', utilization: 42, resets_at: now + 86400 }]);
+  } finally { t.cleanup(); }
+});
+
+test('scoped mode: a fresh session record does not stop the check; its live 5h/7d stay', () => {
+  const { t, env, loginDir } = setup('scoped');
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: now - 10,
+      five_hour: { utilization: 66, resets_at: now + 3600 }, seven_day: { utilization: 70, resets_at: now + 86400 } });
+    assert.equal(refresh.run('B', loginDir, env), 'fresh');                 // normal mode: record is fresh
+    assert.equal(refresh.run('B', loginDir, env, { scoped: true }), 'ok');  // scoped mode: never checked yet
+    const rec = cache.read(t.p, 'B');
+    assert.equal(rec.five_hour.utilization, 66); // live numbers not replaced by /usage's 5%
+    assert.equal(rec.scoped[0].name, 'Fable');
+    assert.equal(refresh.run('B', loginDir, env, { scoped: true }), 'fresh'); // checked_at now fresh
+  } finally { t.cleanup(); }
+});
+
+test('guard c: a record dated far in the future is replaced by the check, not kept as a live one', () => {
+  const { t, env, loginDir } = setup('ok');
+  try {
+    const future = Math.floor(Date.now() / 1000) + 5 * 3600;
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: future, five_hour: { utilization: 99, resets_at: null }, seven_day: null });
+    assert.equal(refresh.run('B', loginDir, env), 'ok');
+    const rec = cache.read(t.p, 'B');
+    assert.equal(rec.five_hour.utilization, 5);
+    assert.ok(rec.fetched_at < future);
+  } finally { t.cleanup(); }
+});

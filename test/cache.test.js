@@ -196,3 +196,52 @@ test('settleActive: a session seen first with older numbers than the record writ
     assert.equal(cache.read(t.p, 'A').five_hour.utilization, 2);
   } finally { t.cleanup(); }
 });
+
+test('guard c: a record or attempt dated over 5 min in the future means a check is due', () => {
+  const t = tmpEnv();
+  try {
+    const now = 1790000000;
+    assert.equal(cache.fetchDue(t.p, 'B', { fetched_at: now + 86400 }, now), true);
+    assert.equal(cache.fetchDue(t.p, 'B', { fetched_at: now + 60 }, now), false); // small skew is fine
+    cache.writeAttempt(t.p, 'B', { at: now + 86400, ok: true });
+    assert.equal(cache.fetchDue(t.p, 'B', null, now), true);
+    cache.writeAttempt(t.p, 'B', { at: now - 60, ok: true });
+    assert.equal(cache.fetchDue(t.p, 'B', null, now), false);
+  } finally { t.cleanup(); }
+});
+
+test('guard c: a session reply_at in the future is treated as 0', () => {
+  const t = tmpEnv();
+  try {
+    const live = { five: { utilization: 40, resets_at: 50000 }, seven: null };
+    cache.settleActive(t.p, 'A', null, live, { id: 'Z', apiMs: 5 }, 1000);
+    fs.writeFileSync(path.join(t.p.sessionsDir, 'Z.json'), JSON.stringify({ api_ms: 5, reply_at: 99999999 }));
+    const rec = cache.writeRecord(t.p, 'A', { utilization: 60, resets_at: 50000 }, null, 1100);
+    const s = cache.settleActive(t.p, 'A', rec, live, { id: 'Z', apiMs: 5 }, 1200);
+    assert.equal(s.show, null); // the record (1100) is later than a reply at "0"
+  } finally { t.cleanup(); }
+});
+
+test('scoped rows: writeActive keeps them and checked_at; rollForward rolls them by whole weeks', () => {
+  const t = tmpEnv();
+  try {
+    const R = 100000;
+    cache.writeRecord(t.p, 'A', null, null, 500, { scoped: [{ name: 'Fable', utilization: 42, resets_at: R }], checked_at: 500 });
+    const live = { five: { utilization: 10, resets_at: R }, seven: { utilization: 20, resets_at: R } };
+    const rec = cache.writeActive(t.p, 'A', cache.read(t.p, 'A'), live, 900);
+    assert.deepEqual(rec.scoped, [{ name: 'Fable', utilization: 42, resets_at: R }]);
+    assert.equal(rec.checked_at, 500);
+    const rolled = cache.rollForward(rec, R + 10);
+    assert.deepEqual(rolled.scoped, [{ name: 'Fable', utilization: 0, resets_at: R + WEEK }]);
+  } finally { t.cleanup(); }
+});
+
+test('checkDue: paced by checked_at, not by fetched_at', () => {
+  const t = tmpEnv();
+  try {
+    const now = 1790000000;
+    assert.equal(cache.checkDue(t.p, 'A', { fetched_at: now, checked_at: now - 3600 }, now), true);
+    assert.equal(cache.checkDue(t.p, 'A', { fetched_at: now, checked_at: now - 60 }, now), false);
+    assert.equal(cache.checkDue(t.p, 'A', { fetched_at: now }, now), true);
+  } finally { t.cleanup(); }
+});

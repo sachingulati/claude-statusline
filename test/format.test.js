@@ -124,3 +124,33 @@ test('emoji-by-default symbols are wide; U+FE0F widens the one before it', () =>
   assert.equal(F.visibleWidth('\u{1f1ee}\u{1f1f3}'), 2); // a flag: two regional indicators
   assert.equal(F.charWidth('☀', '️'), 2);
 });
+
+test('cleanPct: finite 0..1000 only; the cap clamps', () => {
+  assert.equal(F.cleanPct(52, 100), 52);
+  assert.equal(F.cleanPct(130, 100), 100);
+  assert.equal(F.cleanPct(130, Infinity), 130);
+  for (const bad of [-1, 1001, 1790812345, NaN, Infinity, '50', null, undefined]) {
+    assert.equal(F.cleanPct(bad, 100), null, String(bad));
+  }
+});
+
+test('oneLine: newlines and escape codes become single spaces', () => {
+  assert.equal(F.oneLine('a\nb\x1b[31m c'), 'a b [31m c');
+  assert.equal(F.oneLine(42), '');
+});
+
+test('pace5hPct: share of the 5-hour window elapsed', () => {
+  const now = Date.UTC(2026, 8, 29, 12);
+  assert.equal(F.pace5hPct(null, now), null);
+  assert.ok(Math.abs(F.pace5hPct(Math.floor((now + 3 * HOUR) / 1000), now) - 40) < 0.01);
+  assert.equal(F.pace5hPct(Math.floor((now + 6 * HOUR) / 1000), now), 0);
+  assert.equal(F.pace5hPct(Math.floor((now - HOUR) / 1000), now), 100);
+});
+
+test('oneLine: bidi overrides, isolates, zero-width and the Arabic letter mark never reach the terminal', () => {
+  assert.equal(F.oneLine('a‮b'), 'a b');
+  assert.equal(F.oneLine('a​b'), 'a b');
+  assert.equal(F.oneLine('a⁦b⁩c'), 'a b c');
+  assert.equal(F.oneLine('a؜b'), 'a b');
+  assert.equal(F.oneLine('a‏b‪c'), 'a b c');
+});

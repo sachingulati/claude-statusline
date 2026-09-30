@@ -12,6 +12,8 @@ const T = require('./template');
 const F = require('./format');
 const L = require('./lines');
 const cache = require('./cache');
+const PT = require('./passthrough');
+const CC = require('./ccfields');
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
@@ -70,6 +72,27 @@ function load(p) {
   return normalize(raw, p);
 }
 
+// Line 1 also takes any Claude Code field by name; the other templates only their own.
+function allowedIn(which) {
+  return function (n) { return L.FIELDS[which].indexOf(n) !== -1 || (which === 'line1' && PT.NAME.test(n)); };
+}
+function fieldsHint(which) {
+  return 'Fields here: ' + L.FIELDS[which].join(', ') +
+    (which === 'line1' ? ', or any Claude Code status line field by name, e.g. {session_name} (sl.js fields lists them)' : '');
+}
+
+// Names that are neither sline fields nor documented Claude Code fields: allowed, but said.
+function templateWarnings(which, text) {
+  if (which !== 'line1') return [];
+  const r = T.parse(text);
+  if (r.error) return [];
+  return T.fields(r.parts).map(function (f) { return f.name; }).filter(function (n, i, all) {
+    return all.indexOf(n) === i && L.FIELDS.line1.indexOf(n) === -1 && CC.DOCUMENTED.indexOf(n) === -1;
+  }).map(function (n) {
+    return '{' + n + "} is not a documented Claude Code field; it prints nothing if Claude Code doesn't send it";
+  });
+}
+
 // A hand-edited template that doesn't parse draws the default (with a hint); one naming an
 // unknown field is kept, and the field prints as typed. Both are reported by doctor.
 function loadTemplate(which, value, problems) {
@@ -82,11 +105,11 @@ function loadTemplate(which, value, problems) {
     return { parts: def.parts, broken: true };
   }
   T.fields(r.parts).forEach(function (f) {
-    if (L.FIELDS[which].indexOf(f.name) === -1) {
+    if (!allowedIn(which)(f.name)) {
       problems.push({
         key: key,
         message: key + ': unknown field {' + f.name + '} at column ' + f.column + ' (shown as typed)',
-        fix: 'Fields here: ' + L.FIELDS[which].join(', '),
+        fix: fieldsHint(which),
       });
     }
   });
@@ -113,6 +136,7 @@ function normalizeDisplay(raw) {
   const co = r.colors && typeof r.colors === 'object' ? r.colors : {};
   Object.keys(d.colors).forEach(function (k) { d.colors[k] = pick('display.colors.' + k, co[k], d.colors[k]); });
   d.clock = pick('display.clock', r.clock, d.clock);
+  d.width = pick('display.width', r.width, d.width);
   return d;
 }
 
@@ -165,7 +189,7 @@ function parseDays(v) {
 
 function templateKey(which) {
   return function (v) {
-    const e = T.check(v, L.FIELDS[which]);
+    const e = T.check(v, allowedIn(which), fieldsHint(which));
     if (e) throw new UserError('display.' + which + ': ' + e.message + ' at column ' + e.column, e.fix);
     return v;
   };
@@ -203,6 +227,14 @@ function parseColor(v) {
   return typeof v === 'number' ? v : String(v).toLowerCase();
 }
 
+function parseWidth(v) {
+  const s = String(v).trim().toLowerCase();
+  if (s === 'auto' || s === 'off') return s;
+  const n = Number(s);
+  if (Number.isInteger(n) && n >= 20) return n;
+  throw new UserError('Expected auto, off or a whole number of at least 20, got "' + v + '"');
+}
+
 function parseClock(v) {
   const s = String(v).toLowerCase();
   if (s === '12h' || s === '12') return '12h';
@@ -221,8 +253,10 @@ const KEYS = {
   'display.subagent': { parse: templateKey('subagent'), def: L.DEFAULT_TEMPLATES.subagent },
   'display.separator': { parse: parseSeparator, def: L.DEFAULT_DISPLAY.separator },
   'display.thresholds.7dPace': { parse: parseBool, def: L.DEFAULT_DISPLAY.thresholds['7dPace'] },
+  'display.thresholds.5hPace': { parse: parseBool, def: L.DEFAULT_DISPLAY.thresholds['5hPace'] },
   'display.thresholds.5hResetSoon': { parse: wholeAtLeast0('minutes'), def: L.DEFAULT_DISPLAY.thresholds['5hResetSoon'] },
   'display.thresholds.7dResetSoon': { parse: wholeAtLeast0('hours'), def: L.DEFAULT_DISPLAY.thresholds['7dResetSoon'] },
+  'display.width': { parse: parseWidth, def: 'auto' },
   'display.clock': { parse: parseClock, def: L.DEFAULT_DISPLAY.clock },
 };
 ['ctx', '5h', '7d', 'spend'].forEach(function (k) {
@@ -417,6 +451,6 @@ function registerFolder(p, dir) {
 }
 
 module.exports = {
-  KEYS, slug, readRaw, normalize, load, set, show, resetDisplay,
+  KEYS, templateWarnings, slug, readRaw, normalize, load, set, show, resetDisplay,
   listAccounts, addAccount, renameAccount, forgetAccount, knows, registerFolder,
 };

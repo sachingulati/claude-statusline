@@ -4,12 +4,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
-const { tmpEnv, writeJson, stripAnsi } = require('./helpers');
+const { tmpEnv, writeJson, stripAnsi, childEnv } = require('./helpers');
 const launcher = require('../src/launcher');
 const { installedRoot } = require('../src/launch');
 
 function runLauncher(t, stdin, args) {
-  const env = Object.assign({}, process.env, t.env);
+  const env = childEnv(t);
   return cp.execFileSync(process.execPath, [t.p.launcher].concat(args || []), { env, input: stdin, encoding: 'utf8' });
 }
 
@@ -64,6 +64,8 @@ test('the launcher renders through the pointed-to plugin', () => {
     launcher.sync(t.p);
     const out = stripAnsi(runLauncher(t, JSON.stringify({ workspace: { current_dir: t.home }, model: { id: 'm' } })));
     assert.match(out, /^dir:~ · model:m/);
+    // No background check leaks out of a test: it would hold the temp folder open.
+    assert.deepEqual(fs.existsSync(t.p.cacheDir) ? fs.readdirSync(t.p.cacheDir).filter(f => /.attempt.json$/.test(f)) : [], []);
   } finally { t.cleanup(); }
 });
 

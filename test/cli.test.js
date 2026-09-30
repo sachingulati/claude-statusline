@@ -4,15 +4,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
-const { tmpEnv, writeJson } = require('./helpers');
+const { tmpEnv, writeJson, childEnv } = require('./helpers');
 
 const CLI = path.join(__dirname, '..', 'cli', 'sl.js');
 
 function sl(t, args, opts) {
   opts = opts || {};
-  const env = Object.assign({}, process.env, t.env, opts.env || {});
-  delete env.CLAUDE_SECURESTORAGE_CONFIG_DIR; // never inherit the real session's login folder
-  if (opts.env && opts.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = opts.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const env = childEnv(t, opts.env);
   const r = cp.spawnSync(process.execPath, [CLI].concat(args), { env, cwd: opts.cwd || t.home, input: opts.input || '', encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr, json: args.includes('--json') ? JSON.parse(r.stdout) : null };
 }
@@ -191,4 +189,33 @@ test('init sets up the subagent rows; uninstall takes them away again', () => {
     assert.equal(u.json.result.subagentLeftAlone, false);
     assert.equal('subagentStatusLine' in JSON.parse(fs.readFileSync(t.p.settingsFile, 'utf8')), false);
   } finally { t.cleanup(); }
+});
+
+test('fields lists sline fields and documented Claude Code fields', () => {
+  const t = tmpEnv();
+  try {
+    const r = sl(t, ['fields', '--json']);
+    assert.equal(r.code, 0);
+    assert.equal(r.json.ok, true);
+    assert.ok(r.json.result.claudeCode.includes('session_name'));
+    assert.ok(r.json.result.sline.line1.includes('dir'));
+  } finally { t.cleanup(); }
+});
+
+test('childEnv drops the real session\'s pointers and cannot launch a real claude', () => {
+  const t = tmpEnv();
+  const keep = ['CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_SLINE_HOME', 'COLUMNS'].map(k => [k, process.env[k]]);
+  try {
+    Object.assign(process.env, { CLAUDE_SECURESTORAGE_CONFIG_DIR: 'x', CLAUDE_SLINE_HOME: 'y', COLUMNS: '50' });
+    const env = childEnv(t, { FOO: '1' });
+    assert.equal(env.CLAUDE_SECURESTORAGE_CONFIG_DIR, undefined);
+    assert.equal(env.CLAUDE_SLINE_HOME, undefined);
+    assert.equal(env.COLUMNS, undefined);
+    assert.equal(env.FOO, '1');
+    assert.equal(env.CLAUDE_CONFIG_DIR, t.env.CLAUDE_CONFIG_DIR);
+    assert.ok(!fs.existsSync(env.CLAUDE_SLINE_CLAUDE));
+  } finally {
+    keep.forEach(([k, v]) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; });
+    t.cleanup();
+  }
 });

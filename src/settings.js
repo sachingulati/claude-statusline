@@ -133,7 +133,7 @@ function restore(p) {
   const s = read(p);
   if (!rec || typeof rec !== 'object') {
     if (!isOurs(s.statusLine, p) && !isOursSubagent(s.subagentStatusLine, p)) {
-      throw new UserError('sline is not installed: settings.json does not point at it', 'Nothing to undo');
+      throw new UserError('SLine is not installed: settings.json does not point at it', 'Nothing to undo');
     }
     rec = { previousStatusLine: null, previousSubagentStatusLine: null };
   }

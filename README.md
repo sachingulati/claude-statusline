@@ -1,4 +1,4 @@
-# sline — Claude status line
+# SLine — Claude status line
 
 A [Claude Code](https://claude.com/claude-code) plugin that shows **rate limits for every Claude
 account you use** in the status line: live for this session's account, and as last recorded or
@@ -77,8 +77,28 @@ first", "drop effort", "red instead of orange", "12-hour clock"), or reset with
 |---|---|
 | Line 1 | `dir`, `dir.full`, `dir.name`, `branch`, `model`, `model.name`, `effort`, `ctx`, `session` |
 | Account label | `label` (left out when only one account line shows) |
-| Account lines | `5h`, `5h.reset`, `7d`, `7d.pace`, `7d.reset`, `spend`, `spend.reset`, `age`, `status` |
+| Account lines | `5h`, `5h.reset`, `5h.pace`, `7d`, `7d.pace`, `7d.reset`, `7d.model`, `7d.model.reset`, `spend`, `spend.reset`, `age`, `status` |
 | Subagent rows | `type`, `activity`, `model`, `model.name`, `effort`, `ctx`, `tokens`, `elapsed` |
+
+Line 1 also takes any field of Claude Code's status line JSON by its own name, e.g.
+`{session_name}`, `{output_style.name}`, `{vim.mode}`. `node cli/sl.js fields` lists the
+documented ones. SLine's own fields win a name clash. The ending of the name sets the format:
+
+| Ending | Shown as |
+|---|---|
+| `_at` | a clock time: `14:32`, or `Mon 17:29` on another day |
+| `_ms` | a duration: `1m42s` |
+| `_usd` | dollars: `$12.40` |
+| `_percentage` | a whole percent: `12%` (rounded, capped at 100%; nonsense values show nothing) |
+| other text or number | as is |
+| `true` / `false` | `on` / nothing |
+
+Empty or missing values show nothing and drop their `[ … ]` group, so give each one its own group:
+
+```
+[ · {session_name}]
+[ · cache until {prompt_cache.expires_at}]
+```
 
 The defaults:
 
@@ -89,11 +109,29 @@ account: [5h: {5h}, {5h.reset}]{sep}[7d: {7d} / {7d.pace}, {7d.reset}]{sep}[spen
 subagent: [{type}  ]{activity}{sep}[model:{model.name}]{sep}[effort:{effort}]{sep}[ctx: {ctx}]{sep}[tokens:{tokens}]{sep}[{elapsed}]
 ```
 
-Thresholds (`ctx 30,65`, `5h`, `7d` and `spend 30,75`), the 7d pace rule, the "reset soon"
+Thresholds (`ctx 30,65`, `5h`, `7d` and `spend 30,75`), the 7d pace rule, the 5h pace rule
+(`display.thresholds.5hPace`, off by default: the 5h value turns orange when it is ahead of the
+share of the 5-hour window that has passed), the "reset soon"
 windows (5h: 60 minutes, 7d: 48 hours), the colours (`ok`, `warn`, `high`, `dim`: a name, a
 0-255 number, `#rrggbb` or `none`) and the clock (`24h`/`12h`) are settings too. `NO_COLOR`
 turns colour off. A template that doesn't parse is refused; if one is edited into `config.json`
 by hand, that line falls back to its default and says so, and `/sline:doctor` explains.
+
+### Fitting the terminal width
+
+`display.width` is `auto` (the default: the terminal's `COLUMNS` minus 2), `off`, or a whole
+number of at least 20. When a line is too wide, SLine first shortens the folder
+(`~/…/claude-statusline`), then drops `[ … ]` groups from the right, then cuts the end with `…`.
+Account lines drop the same groups together so they stay aligned. A line that would
+be left empty keeps more groups and is cut instead. A number is used as the width as is (no
+margin), with or without `COLUMNS`; with `auto` and no `COLUMNS`, nothing is fitted.
+
+### Per-model weekly limit
+
+Max plans may spend part of the weekly limit on Fable. Claude Code's status line JSON doesn't
+carry it, so `{7d.model}` (e.g. `Fable 42%`) and `{7d.model.reset}` come from the background
+checks. Using either in the account template also makes SLine check the **active** account every
+30 minutes (with `fetch.otherAccounts` on, like every background check). Pro plans have no such row, so the field stays empty and its group drops.
 
 ## Multiple accounts
 
@@ -134,60 +172,20 @@ the weekly quota over those days. Weekends then accrue nothing, so the pace hold
 weekend use shows as over pace. Anthropic's real limit is always a rolling 7 days; this only
 changes the expected burn-down.
 
-## How it works
-
-- Claude Code runs `node "<home>/.claude/sline/launch.js"` (a full path; `<home>` is your home
-  folder). The launcher reads the current plugin folder from `~/.claude/sline/root` and renders
-  from there. After a plugin update it finds
-  the new folder in Claude Code's install record and repoints itself, so settings.json never goes
-  stale. The plugin has no hooks; nothing runs when a session starts.
-- Subagent rows come from Claude Code's `subagentStatusLine` setting, which runs the same
-  launcher with a `subagents` argument once per refresh. Claude Code passes each session only its
-  own rows. The agent type isn't in that data, so it's read from the small `agent-<id>.meta.json`
-  Claude Code keeps next to the session transcript; if that file is missing, the row just has no
-  type. If anything fails, Claude Code's own row stays.
-- The active account's numbers come from the data Claude Code hands the status line: free and
-  instant. They're also saved to its cache, so after you switch accounts it shows where it really
-  ended.
-- Each session saves its own account's numbers, but only after a reply: Claude Code redraws an
-  idle session with the numbers from its last reply, and those must not overwrite newer ones
-  from another session. A session tells a reply from a redraw by the API time in Claude Code's
-  data, which grows only with replies; it keeps that total in `~/.claude/sline/sessions/`.
-  An idle session whose account has newer numbers on record shows those instead of its own.
-  Your other sessions' status lines read them too.
-- When another account's numbers are more than 30 minutes old, the status line starts a
-  background check and keeps drawing the old numbers meanwhile. The check runs Claude Code's
-  own `/usage` for that account: `claude -p /usage --no-session-persistence --output-format
-  stream-json --verbose`, with `CLAUDE_SECURESTORAGE_CONFIG_DIR` set to the account's login
-  folder and `CLAUDE_CONFIG_DIR` set to a folder of its own under `~/.claude/sline/accounts/`
-  (Claude Code keeps an account's identity and its `/usage` cache in its config folder). It
-  uses no model turns and no quota. One check per account at a time; not again for 30
-  minutes after one that worked, 60 after one that didn't. `/sline:config fetch.otherAccounts
-  false` turns checks off.
-- `refreshInterval` makes idle sessions redraw every 30 s, so numbers another session records,
-  a finished check, or a reset passing show up without a reply.
-
-Files, all under `~/.claude/sline/` (or `$CLAUDE_CONFIG_DIR/sline/`):
-
-| File | |
-|---|---|
-| `launch.js`, `root` | launcher and plugin pointer |
-| `config.json` | accounts and settings |
-| `cache/*.json` | usage per account as last recorded or checked (percentages and reset times only) |
-| `cache/*.attempt.json` | when each account was last checked, and whether it worked |
-| `sessions/<id>.json` | each session's API time at its last reply, to tell replies from redraws; removed after 2 days untouched |
-| `accounts/<label>/` | Claude Code's config folder for that account's checks (no login in it) |
-| `hidden` | present while usage is hidden |
-| `install.json` | your previous status line and subagent rows, for uninstall |
-
 ## Privacy and security
 
-- sline reads no credentials and makes no network calls itself. The status line uses the data
+- SLine reads no credentials and makes no network calls itself. The status line uses the data
   Claude Code hands it and saves percentages and reset times per account under
   `~/.claude/sline/`.
-- For background checks it runs Claude Code's `/usage` under your other logins, and Claude
-  Code contacts Anthropic as it always does. `/sline:config fetch.otherAccounts false` turns
-  that off.
+- For background checks it runs Claude Code's `/usage` under your other logins (and under the
+  active one when the account template shows `{7d.model}`), and Claude
+  Code contacts Anthropic as it always does. A check is `claude -p /usage
+  --no-session-persistence`, with a config folder of its own under `~/.claude/sline/accounts/`.
+  It uses no model turns and no quota, and runs at most once per account every 30 minutes.
+  `/sline:config fetch.otherAccounts false` turns that off.
+- `/sline:init` writes to `~/.claude/settings.json`: it sets `statusLine` and
+  `subagentStatusLine`, after backing the file up. `/sline:uninstall` puts your previous
+  values back.
 
 ## Development
 

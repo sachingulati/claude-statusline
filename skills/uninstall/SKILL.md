@@ -1,8 +1,8 @@
 ---
-description: Remove the sline status line from your settings before uninstalling the plugin, restoring your previous status line.
+description: Remove the SLine status line from your settings before uninstalling the plugin, restoring your previous status line.
 argument-hint: "[--purge]"
 disable-model-invocation: true
-allowed-tools: Bash(node:*)
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js" *)
 ---
 
 1. Tell the user what will happen: settings.json gets back the status line and subagent rows it had before `/sline:init` (or none), and the launcher is removed. Accounts config and usage cache are kept unless `--purge` is given. Ask them to confirm. Stop if they don't.

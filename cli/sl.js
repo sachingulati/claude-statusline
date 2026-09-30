@@ -8,13 +8,14 @@
 //   config show | set <key> <value> | reset display | account list | account add <label> <dir>
 //          | account rename <label> <new> | account forget <label>
 //   usage [hide|show|active|all|reset] usage visibility and which accounts show (bare = report)
-//   quota                              every account's usage from the cache
+//   fields                             template fields: sline's and Claude Code's
+//   quota                            every account's usage from the cache
 //   doctor                             health checks (exit 1 if any fail)
 //   uninstall [--purge]                restore settings.json, remove launcher
 
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 18) {
-  console.error('sline needs Node 18 or later (found ' + process.versions.node + '). Install it from https://nodejs.org');
+  console.error('SLine needs Node 18 or later (found ' + process.versions.node + ').');
   process.exit(1);
 }
 
@@ -26,6 +27,7 @@ const launcher = require('../src/launcher');
 const quota = require('../src/quota');
 const doctor = require('../src/doctor');
 const lines = require('../src/lines');
+const CC = require('../src/ccfields');
 const { UserError, writeFileAtomic } = require('../src/fsutil');
 
 const argv = process.argv.slice(2);
@@ -33,7 +35,7 @@ const json = argv.includes('--json');
 const args = argv.filter(function (a) { return a !== '--json'; });
 const p = paths.resolve(process.env);
 
-const USAGE = 'Usage: sl.js <init|config|usage|quota|doctor|uninstall> [args] [--json]';
+const USAGE = 'Usage: sl.js <init|config|usage|fields|quota|doctor|uninstall> [args] [--json]';
 
 function takeFlag(name) {
   const i = args.indexOf(name);
@@ -136,7 +138,10 @@ function cmdConfig() {
     const v = config.set(p, key, value);
     const data = { key: key, value: v };
     if (key.indexOf('display.') === 0) data.sample = lines.sampleLines(config.load(p).display);
-    return { data: data, text: key + ' = ' + JSON.stringify(v) + (data.sample ? '\n\n' + data.sample.join('\n') : '') };
+    const warnings = key.indexOf('display.') === 0 ? config.templateWarnings(key.slice(8), String(v)) : [];
+    if (warnings.length) data.warnings = warnings;
+    return { data: data, text: key + ' = ' + JSON.stringify(v) + (data.sample ? '\n\n' + data.sample.join('\n') : '') +
+      (warnings.length ? '\nWarning: ' + warnings.join('\nWarning: ') : '') };
   }
   if (sub === 'reset') {
     if (args[2] !== 'display') throw new UserError('Usage: config reset display');
@@ -209,8 +214,18 @@ function cmdUninstall() {
   };
 }
 
+function cmdFields() {
+  const data = { sline: lines.FIELDS, claudeCode: CC.DOCUMENTED,
+    suffixes: { _at: 'clock time', _ms: 'duration', _usd: 'dollars', _percentage: 'whole percent' } };
+  return {
+    data: data,
+    text: 'SLine fields\n' + Object.keys(lines.FIELDS).map(function (k) { return '  ' + k.padEnd(9) + lines.FIELDS[k].join(', '); }).join('\n') +
+      '\n\nClaude Code fields (line 1 only; names ending _at, _ms, _usd, _percentage are formatted)\n  ' + CC.DOCUMENTED.join('\n  '),
+  };
+}
+
 const COMMANDS = {
-  init: cmdInit, config: cmdConfig, usage: cmdUsage,
+  init: cmdInit, config: cmdConfig, usage: cmdUsage, fields: cmdFields,
   quota: cmdQuota, doctor: cmdDoctor, uninstall: cmdUninstall,
 };
 

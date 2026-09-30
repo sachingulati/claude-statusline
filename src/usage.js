@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const F = require('./format');
 
 // 0 model turns, no quota. The assistant event carries usage_report.rate_limits.
 const ARGS = ['-p', '/usage', '--no-session-persistence', '--output-format', 'stream-json', '--verbose'];
@@ -42,10 +43,12 @@ function epoch(iso) {
 }
 
 function slot(l) {
-  return l && typeof l.percent === 'number' ? { utilization: l.percent, resets_at: epoch(l.resets_at) } : null;
+  const v = l ? F.cleanPct(l.percent, 100) : null;
+  return v != null ? { utilization: v, resets_at: epoch(l.resets_at) } : null;
 }
 
-// session → 5h, weekly_all → 7d. No usage_report (no login, rate limited, not a
+// session → 5h, weekly_all → 7d, weekly_scoped → per-model weekly rows (Fable on Max).
+// No usage_report (no login, rate limited, not a
 // subscriber: all print the cost view instead) → null.
 function parse(stdout) {
   let limits = null;
@@ -59,7 +62,14 @@ function parse(stdout) {
   const by = function (kind) { return limits.find(function (l) { return l && l.kind === kind; }); };
   const five = slot(by('session'));
   const seven = slot(by('weekly_all'));
-  return five || seven ? { five_hour: five, seven_day: seven } : null;
+  // Claude Code: "Classify a row on this [kind], never on a label." The name is its own label.
+  const scoped = limits.filter(function (l) { return l && l.kind === 'weekly_scoped'; }).map(function (l) {
+    const name = l.scope && l.scope.model && typeof l.scope.model.display_name === 'string'
+      ? l.scope.model.display_name.trim() : '';
+    const s = slot(l);
+    return name && s ? { name: name.slice(0, 40), utilization: s.utilization, resets_at: s.resets_at } : null;
+  }).filter(Boolean);
+  return five || seven || scoped.length ? { five_hour: five, seven_day: seven, scoped: scoped } : null;
 }
 
 module.exports = { ARGS, findClaude, command, parse };

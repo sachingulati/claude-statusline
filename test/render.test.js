@@ -214,7 +214,7 @@ test('custom templates, separator and 12h clock reach the status line', () => {
     };
     writeJson(t.p.configFile, raw);
     const out = stripAnsi(render.render(payload(proj), { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
-    assert.equal(out[0], 'claude-opus-5-5 | proj | {nope}');
+    assert.equal(out[0], 'claude-opus-5-5 | proj'); // {nope} is a pass-through name Claude Code doesn't send: empty, not typed out
     assert.match(out[1], /^A: 52% \(\d{1,2}:\d\d[ap]m\)$/);
     assert.match(out[2], /^B: 29% \(\d{1,2}:\d\d[ap]m\) \| \(3m ago\)$/);
   } finally { t.cleanup(); }
@@ -308,5 +308,194 @@ test('an idle session of the active account neither overwrites nor shows numbers
     const out = stripAnsi(render.render(stale, opts(NOW + 30000))).trimEnd().split('\n');
     assert.match(out[1], /^\[A\] 5h: 76%/);
     assert.equal(cache.read(t.p, 'A').five_hour.utilization, 76);
+  } finally { t.cleanup(); }
+});
+
+test('guard b: stdin percentages over 100 clamp, nonsense is dropped', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const out = stripAnsi(render.render(payload(proj, {
+      context_window: { used_percentage: 1790812345 },
+      rate_limits: {
+        five_hour: { used_percentage: 130, resets_at: NOW_S + 3600 },
+        seven_day: { used_percentage: -5, resets_at: NOW_S + 86400 },
+      },
+    }), { env: t.env, now: NOW, spawn: () => {} })).split('\n');
+    assert.ok(!/ctx:/.test(out[0]), out[0]);
+    assert.match(out[1], /^\[A\] 5h: 100%/);
+    assert.ok(!/7d:/.test(out[1]), out[1]);
+  } finally { t.cleanup(); }
+});
+
+test('7d.model in the account template shows the recorded per-model rows', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: path.join(t.home, '.creds-b') }],
+      display: { account: '[5h: {5h}]{sep}[{7d.model}]' } });
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: NOW_S - 60, five_hour: { utilization: 29, resets_at: NOW_S + 3600 },
+      seven_day: null, scoped: [{ name: 'Fable', utilization: 42, resets_at: NOW_S + 86400 }] });
+    const out = stripAnsi(render.render(payload(proj), { env: t.env, now: NOW, spawn: () => {} })).split('\n');
+    assert.equal(out[2], '[B] 5h: 29% · Fable 42%');
+    assert.equal(out[1], '[A] 5h: 52%'); // no rows for A: the group drops
+  } finally { t.cleanup(); }
+});
+
+test('the active account is checked only when the account template uses 7d.model', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const spawned = [];
+    const spy = (a, mode) => spawned.push(a.key + ':' + (mode || 'other'));
+    render.render(payload(proj), { env: t.env, now: NOW, spawn: spy });
+    assert.deepEqual(spawned, []);
+    writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: path.join(t.home, '.creds-b') }],
+      display: { account: '[5h: {5h}]{sep}[{7d.model}]' } });
+    render.render(payload(proj), { env: t.env, now: NOW, spawn: spy });
+    assert.deepEqual(spawned, ['A:scoped']);
+  } finally { t.cleanup(); }
+});
+
+test('pass-through: Claude Code fields on line 1; sline names win; objects drop their group', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: path.join(t.home, '.creds-b') }],
+      display: { line1: '{model}[ · {session_name}][ · {prompt_cache}][ · {cost.total_cost_usd}][ · {agent.name}]' } });
+    const out = stripAnsi(render.render(payload(proj, { session_name: 'fix login', prompt_cache: { warm: true }, cost: { total_cost_usd: 1.5 } }),
+      { env: t.env, now: NOW, spawn: () => {} })).split('\n');
+    assert.equal(out[0], 'claude-opus-5-5 · fix login · $1.50');
+  } finally { t.cleanup(); }
+});
+
+function widthRun(t, proj, cols, extra) {
+  const env = Object.assign({}, t.env, cols ? { COLUMNS: String(cols) } : {});
+  return render.render(payload(proj, extra), { env, now: NOW, spawn: () => {} });
+}
+
+test('width: no COLUMNS is byte-identical; wide enough changes nothing', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const base = widthRun(t, proj, 0);
+    assert.equal(widthRun(t, proj, 200), base);
+  } finally { t.cleanup(); }
+});
+
+test('width: line 1 shortens the folder first, then drops groups from the right', () => {
+  const { t } = twoAccounts();
+  try {
+    const deep = path.join(t.home, 'projects', 'ai', 'claude-statusline');
+    fs.mkdirSync(deep, { recursive: true });
+    // Full line 1 is 96 columns. COLUMNS 96 → width 94: the first folder step (89) fits.
+    // COLUMNS 60 → width 58: even …/claude-statusline gives 84, so session (−19) and ctx (−11) go: 54.
+    let l1 = stripAnsi(widthRun(t, deep, 96).split('\n')[0]);
+    assert.equal(l1, 'dir:~/…/ai/claude-statusline · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk');
+    l1 = stripAnsi(widthRun(t, deep, 60).split('\n')[0]);
+    assert.equal(l1, 'dir:…/claude-statusline · model:Opus 5.5 · effort:high');
+    for (const cols of [40, 30, 22]) {
+      for (const line of widthRun(t, deep, cols).trimEnd().split('\n')) {
+        assert.ok(require('../src/format').visibleWidth(line) <= cols - 2, cols + ': ' + stripAnsi(line));
+      }
+    }
+  } finally { t.cleanup(); }
+});
+
+test('width: account lines drop the same groups, so [A] and [B] stay aligned', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const out = stripAnsi(widthRun(t, proj, 40)).trimEnd().split('\n');
+    assert.match(out[1], /^\[A\] 5h: 52%, \d\d:\d\d$/);
+    assert.match(out[2], /^\[B\] 5h: 29%, \d\d:\d\d$/);
+  } finally { t.cleanup(); }
+});
+
+test('width: a usage:-- account line survives dropping and stays in place', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    fs.unlinkSync(require('../src/cache').file(t.p, 'B'));
+    const out = stripAnsi(widthRun(t, proj, 40)).trimEnd().split('\n');
+    assert.equal(out.length, 3);
+    assert.match(out[2], /^\[B\] usage:--$/);
+  } finally { t.cleanup(); }
+});
+
+test('width: a spend-only active account is cut, not dropped, next to a full account', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const p = payload(proj, { rate_limits: { spend_limit: { used_percentage: 40 } } });
+    const env = Object.assign({}, t.env, { COLUMNS: '40' });
+    const out = stripAnsi(render.render(p, { env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
+    assert.equal(out.length, 3);
+    assert.match(out[1], /^\[A\] /);
+    assert.match(out[1], /40%/);
+    assert.match(out[2], /^\[B\] 5h: 29%/);
+  } finally { t.cleanup(); }
+});
+
+test('guard c: another account whose record is dated far in the future shows no age', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeCache(t.p, 'B', { status: 'ok', fetched_at: NOW_S + 5 * 3600,
+      five_hour: { utilization: 29, resets_at: NOW_S + 3 * 3600 }, seven_day: null });
+    const out = stripAnsi(render.render(payload(proj), { env: t.env, now: NOW, spawn: () => {} })).trimEnd().split('\n');
+    assert.match(out[2], /^\[B\] 5h: 29%/);
+    assert.ok(!/ago/.test(out[2]), out[2]);
+  } finally { t.cleanup(); }
+});
+
+test('the active account shows its recorded per-model rows', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: path.join(t.home, '.creds-b') }],
+      display: { account: '[5h: {5h}]{sep}[{7d.model}]' } });
+    writeCache(t.p, 'A', { status: 'ok', fetched_at: NOW_S - 60, checked_at: NOW_S - 60,
+      five_hour: { utilization: 52, resets_at: NOW_S + 7200 }, seven_day: null,
+      scoped: [{ name: 'Fable', utilization: 42, resets_at: NOW_S + 86400 }] });
+    const out = stripAnsi(render.render(payload(proj), { env: t.env, now: NOW, spawn: () => {} })).split('\n');
+    assert.equal(out[1], '[A] 5h: 52% · Fable 42%');
+  } finally { t.cleanup(); }
+});
+
+test('the active per-model check is not started with fetch.otherAccounts off, or after a recent check', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const accts = [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: path.join(t.home, '.creds-b') }];
+    const display = { account: '[5h: {5h}]{sep}[{7d.model}]' };
+    const spawned = [];
+    const spy = (a, mode) => spawned.push(a.key + ':' + (mode || 'other'));
+    writeJson(t.p.configFile, { accounts: accts, display, fetch: { otherAccounts: false } });
+    render.render(payload(proj), { env: t.env, now: NOW, spawn: spy });
+    assert.ok(!spawned.includes('A:scoped'), spawned.join());
+    writeJson(t.p.configFile, { accounts: accts, display });
+    writeCache(t.p, 'A', { status: 'ok', fetched_at: NOW_S - 60, checked_at: NOW_S - 60,
+      five_hour: { utilization: 52, resets_at: NOW_S + 7200 }, seven_day: null });
+    render.render(payload(proj), { env: t.env, now: NOW, spawn: spy });
+    assert.ok(!spawned.includes('A:scoped'), spawned.join());
+  } finally { t.cleanup(); }
+});
+
+test('width: display.width sets the limit with no COLUMNS, and off ignores COLUMNS', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    const cfgWith = function (width) {
+      writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: path.join(t.home, '.creds-b') }],
+        display: { width } });
+    };
+    const base = widthRun(t, proj, 0);
+    cfgWith(60);
+    const fitted = stripAnsi(widthRun(t, proj, 0));
+    assert.notEqual(fitted, stripAnsi(base));
+    fitted.trimEnd().split('\n').forEach(function (l) { assert.ok(l.length <= 60, l.length + ': ' + l); });
+    cfgWith('off');
+    assert.equal(widthRun(t, proj, 40), base);
+  } finally { t.cleanup(); }
+});
+
+test('hidden: usage pass-through fields on line 1 are empty too', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }],
+      display: { line1: '{model}[ · 5h {rate_limits.five_hour.used_percentage}][ · {session_name}]' } });
+    const run = () => stripAnsi(render.render(payload(proj, { session_name: 'fix' }), { env: t.env, now: NOW, spawn: () => {} })).split('\n')[0];
+    assert.equal(run(), 'claude-opus-5-5 · 5h 52% · fix');
+    fs.writeFileSync(t.p.hiddenFlag, '');
+    assert.equal(run(), 'claude-opus-5-5 · fix');
   } finally { t.cleanup(); }
 });

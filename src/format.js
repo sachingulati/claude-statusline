@@ -22,6 +22,23 @@ const DAY = 24 * HOUR;
 
 function pct(v) { return String(v) + '%'; }
 
+// A percentage from outside (stdin, /usage): null unless a finite number from 0 to 1000
+// (Claude Code once sent an epoch time here); anything above `cap` is shown as `cap`.
+function cleanPct(v, cap) {
+  if (typeof v !== 'number' || !isFinite(v) || v < 0 || v > 1000) return null;
+  return Math.min(v, cap);
+}
+
+// One line of plain text: Claude Code's strings can carry newlines, and a stray escape
+// code (7- or 8-bit), bidi override or zero-width character must not reach the terminal.
+function oneLine(s) {
+  return typeof s === 'string'
+    ? s.replace(/[\x00-\x1f\x7f-\x9f؜​-‏‪-‮⁦-⁩]+/g, ' ').replace(/\s+/g, ' ').trim()
+    : '';
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 function clockTime(d, clock) {
   const mm = String(d.getMinutes()).padStart(2, '0');
   if (clock === '12h') {
@@ -37,7 +54,7 @@ function formatResetTime(resetsAt, withDay, now, clock) {
   if (d.getTime() - now <= 0) return null;
   const hm = clockTime(d, clock);
   if (!withDay) return hm;
-  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] + ' ' + hm;
+  return DAYS[d.getDay()] + ' ' + hm;
 }
 
 function formatTokens(n) {
@@ -70,6 +87,14 @@ function pacePct(resetsAt, now, workingDays) {
   const total = workMs(start, end, set);
   const elapsed = workMs(start, Math.min(now, end), set);
   return total > 0 ? Math.max(0, Math.min(100, (elapsed / total) * 100)) : 0;
+}
+
+// Share of the 5-hour window already elapsed. The window starts at first use, so its start
+// is exactly five hours before the reset; work days don't apply.
+function pace5hPct(resetsAt, now) {
+  if (resetsAt == null) return null;
+  const start = resetsAt * 1000 - 5 * HOUR;
+  return Math.max(0, Math.min(100, ((now - start) / (5 * HOUR)) * 100));
 }
 
 function formatAge(s) {
@@ -171,6 +196,6 @@ function level(v, pair) { return v < pair[0] ? 'ok' : v <= pair[1] ? 'warn' : 'h
 
 module.exports = {
   RESET, GREEN, YELLOW, ORANGE, DIM, COLOR_NAMES,
-  pct, formatResetTime, formatTokens, pacePct, formatAge, formatElapsed, charWidth, visibleWidth, displayPath,
-  colorCode, makeStyle, paint, level,
+  pct, cleanPct, oneLine, formatResetTime, clockTime, DAYS, formatTokens, pacePct, pace5hPct, formatAge, formatElapsed, charWidth, visibleWidth, displayPath,
+  HOUR, DAY, colorCode, makeStyle, paint, level,
 };

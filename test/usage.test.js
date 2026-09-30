@@ -12,6 +12,7 @@ test('parse: a real /usage stream gives both windows in epoch seconds', () => {
   assert.deepEqual(usage.parse(fixture('usage-ok.stream.jsonl')), {
     five_hour: { utilization: 5, resets_at: Date.UTC(2026, 8, 30, 21, 30) / 1000 },
     seven_day: { utilization: 45, resets_at: Date.UTC(2026, 9, 5, 18) / 1000 },
+    scoped: [],
   });
 });
 
@@ -28,6 +29,7 @@ test('parse: no reset time, a report nested under message, CRLF lines', () => {
   assert.deepEqual(usage.parse(line + '\r\n'), {
     five_hour: { utilization: 0, resets_at: null },
     seven_day: { utilization: 60, resets_at: Date.UTC(2026, 9, 5, 18) / 1000 },
+    scoped: [],
   });
 });
 
@@ -64,4 +66,20 @@ test('command: the test override, PATH or Path, or null', () => {
     assert.equal(usage.command({ PATH: t.home }, 'linux'), null);
     assert.deepEqual(usage.ARGS, ['-p', '/usage', '--no-session-persistence', '--output-format', 'stream-json', '--verbose']);
   } finally { t.cleanup(); }
+});
+
+test('parse: an epoch-sized percent is dropped, over 100 is clamped', () => {
+  const line = JSON.stringify({ type: 'assistant', usage_report: { rate_limits: { limits: [
+    { kind: 'session', percent: 1790812345, resets_at: '2026-09-30T21:30:00Z' },
+    { kind: 'weekly_all', percent: 104, resets_at: '2026-10-05T18:00:00Z' },
+  ] } } });
+  const r = usage.parse(line);
+  assert.equal(r.five_hour, null);
+  assert.equal(r.seven_day.utilization, 100);
+});
+
+test('parse: weekly_scoped rows become named per-model windows; nameless rows are skipped', () => {
+  const r = usage.parse(fixture('usage-scoped.stream.jsonl'));
+  assert.deepEqual(r.scoped, [{ name: 'Fable', utilization: 42, resets_at: Date.UTC(2026, 9, 5, 18) / 1000 }]);
+  assert.equal(r.seven_day.utilization, 45);
 });

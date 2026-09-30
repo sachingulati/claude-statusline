@@ -202,3 +202,55 @@ test('subagent values: 8-bit controls, bidi and zero-width characters never reac
   const v = L.subagent({ label: 'a\u009b31mb\u0085c‮d​e⁦f' }, null, NOW, s);
   assert.equal(v.activity.text, 'a 31mb c d e f');
 });
+
+test('5h.pace, the 5hPace colour switch, and the start-of-window grace (guard d)', () => {
+  const on = Object.assign({}, L.DEFAULT_DISPLAY.thresholds, { '5hPace': true });
+  const { s } = style({ thresholds: on });
+  // 3h left: 40% of the window gone; 52% used is over pace.
+  let v = L.account({ five: { utilization: 52, resets_at: S + 3 * 3600 } }, NOW, ALL, s);
+  assert.deepEqual(v['5h.pace'], { text: '40%', role: null });
+  assert.equal(v['5h'].role, 'high');
+  // Default (off): thresholds only.
+  v = L.account({ five: { utilization: 52, resets_at: S + 3 * 3600 } }, NOW, ALL, style().s);
+  assert.equal(v['5h'].role, 'warn');
+  // First 30 min of the window: no over-pace colour even when on.
+  v = L.account({ five: { utilization: 20, resets_at: S + 5 * 3600 - 600 } }, NOW, ALL, s);
+  assert.equal(v['5h'].role, 'ok');
+  // Unknown reset: dim stand-in.
+  v = L.account({ five: { utilization: 5, resets_at: null } }, NOW, ALL, s);
+  assert.deepEqual(v['5h.pace'], { text: '--%', role: 'dim' });
+});
+
+test('guard d: no over-pace orange on 7d in the first day of the week', () => {
+  const { s } = style();
+  // Week started 2 h ago (resets in 7d - 2h): 3% used vs ~1% pace, but it's too early to judge.
+  const v = L.account({ seven: { utilization: 3, resets_at: S + 7 * 86400 - 7200 } }, NOW, ALL, s);
+  assert.equal(v['7d'].role, 'ok');
+});
+
+test('7d.model: named per-model rows, coloured by 7d thresholds; earliest reset', () => {
+  const { s } = style();
+  const v = L.account({
+    seven: { utilization: 30, resets_at: S + 3 * 86400 },
+    scoped: [
+      { name: 'Fable', utilization: 80, resets_at: S + 3 * 86400 },
+      { name: 'Mythos\n', utilization: 10, resets_at: S + 2 * 86400 },
+      { name: '', utilization: 50, resets_at: null },
+    ],
+  }, NOW, ALL, s);
+  assert.equal(require('./helpers').stripAnsi(v['7d.model'].text), 'Fable 80%, Mythos 10%');
+  assert.ok(v['7d.model'].text.includes(F.paint(s, 'high', '80%')));
+  assert.equal(v['7d.model.reset'].text, 'Wed 20:00');
+  const none = L.account({ seven: { utilization: 30, resets_at: S + 3 * 86400 } }, NOW, ALL, s);
+  assert.equal(none['7d.model'], null);
+  assert.equal(none['7d.model.reset'], null);
+});
+
+test('lineWidth: COLUMNS minus 2 on auto; a fixed number as is; off or no COLUMNS → 0', () => {
+  const d = L.defaultDisplay();
+  assert.equal(L.lineWidth(d, { COLUMNS: '120' }), 118);
+  assert.equal(L.lineWidth(d, {}), 0);
+  assert.equal(L.lineWidth(d, { COLUMNS: 'x' }), 0);
+  assert.equal(L.lineWidth(Object.assign(d, { width: 90 }), { COLUMNS: '120' }), 90);
+  assert.equal(L.lineWidth(Object.assign(L.defaultDisplay(), { width: 'off' }), { COLUMNS: '120' }), 0);
+});

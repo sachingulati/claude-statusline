@@ -20,14 +20,14 @@ function doctor(p, env, opts) {
 
   const major = Number(process.versions.node.split('.')[0]);
   out.push(major >= 18 ? check('node', 'ok', 'Node ' + process.versions.node)
-    : check('node', 'fail', 'Node ' + process.versions.node + ' is too old', 'Install Node 18 or later from https://nodejs.org'));
+    : check('node', 'fail', 'Node ' + process.versions.node + ' is too old', 'Install Node 18 or later'));
 
   let s = null;
   try { s = settings.read(p); } catch (e) { out.push(check('settings', 'fail', e.message, e.fix)); }
   if (s) {
     const sl = s.statusLine;
     if (settings.isOurs(sl, p)) {
-      out.push(check('statusLine', 'ok', 'settings.json runs the sline launcher'));
+      out.push(check('statusLine', 'ok', 'settings.json runs the SLine launcher'));
       out.push(sl.refreshInterval
         ? check('refreshInterval', 'ok', 'Refreshes every ' + sl.refreshInterval + 's')
         : check('refreshInterval', 'warn', 'No refreshInterval: idle sessions show other accounts\' numbers from their last reply', 'Run /sline:init again'));
@@ -37,13 +37,13 @@ function doctor(p, env, opts) {
         'Run /sline:init'));
     }
     const sub = s.subagentStatusLine;
-    if (settings.isOursSubagent(sub, p)) out.push(check('subagentStatusLine', 'ok', 'settings.json runs the sline subagent rows'));
+    if (settings.isOursSubagent(sub, p)) out.push(check('subagentStatusLine', 'ok', 'settings.json runs the SLine subagent rows'));
     else if (sub === undefined) {
       out.push(check('subagentStatusLine', 'warn', 'Subagent rows are not set up: they show Claude Code\'s default', 'Run /sline:init'));
     } else {
       out.push(check('subagentStatusLine', 'warn',
         'settings.json subagentStatusLine runs something else: ' + ((sub && sub.command) || JSON.stringify(sub)),
-        'Run /sline:init to use sline\'s rows'));
+        'Run /sline:init to use SLine\'s rows'));
     }
   }
 

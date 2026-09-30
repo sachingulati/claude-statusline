@@ -19,12 +19,12 @@ function frontmatter(file) {
   return { fm, body: text.slice(m[0].length) };
 }
 
-test('user-run skills are manual-only, pre-approve node, and call the CLI', () => {
+test('user-run skills are manual-only, pre-approve only the sline CLI, and call the CLI', () => {
   for (const name of USER_SKILLS) {
     const { fm, body } = frontmatter(path.join(ROOT, 'skills', name, 'SKILL.md'));
     assert.ok(fm.description, name + ' description');
     assert.equal(fm['disable-model-invocation'], 'true', name);
-    assert.equal(fm['allowed-tools'], 'Bash(node:*)', name);
+    assert.equal(fm['allowed-tools'], 'Bash(node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js" *)', name);
     assert.ok(body.includes('node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js"'), name + ' runs the CLI');
     assert.ok(!/!`/.test(body), name + ' uses no ! context injection');
   }

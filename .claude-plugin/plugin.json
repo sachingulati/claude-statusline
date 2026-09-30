@@ -1,11 +1,14 @@
 {
   "name": "sline",
-  "displayName": "sline (Claude status line)",
-  "description": "A status line with live 5-hour and 7-day rate limits for every Claude account you use, pace-aware weekly usage, and one command to show or hide the usage numbers.",
-  "version": "0.2.0",
+  "displayName": "SLine: Claude multi-account status line",
+  "description": "Claude Code status line showing 5-hour and weekly rate limits for all your Claude accounts at once: live for this session, recently checked for the rest. Pace-aware usage, and one command to show or hide the numbers. Reads no credentials.",
+  "version": "0.3.0",
   "author": { "name": "Sachin Gulati" },
   "homepage": "https://github.com/sachingulati/claude-statusline",
   "repository": "https://github.com/sachingulati/claude-statusline",
+  "documentationUrl": "https://github.com/sachingulati/claude-statusline#readme",
+  "supportUrl": "https://github.com/sachingulati/claude-statusline/issues",
+  "privacyPolicyUrl": "https://github.com/sachingulati/claude-statusline#privacy-and-security",
   "license": "MIT",
-  "keywords": ["sline", "statusline", "rate-limits", "usage", "quota", "multi-account"]
+  "keywords": ["sline", "claude-code", "statusline", "status-line", "rate-limits", "weekly-limit", "usage", "quota", "pace", "monitoring", "multi-account"]
 }

@@ -20,6 +20,7 @@ const RETRY_FAILED = 3600;     // or this long of one that didn't (the endpoint 
 const WEEK = 7 * 86400;
 const SAME_WINDOW = 4 * 3600;  // reset times closer than this are one window (windows are 5h+ apart)
 const SESSION_TTL = 2 * 86400; // a session state file untouched this long is removed
+const FUTURE = 300;            // a stored time further ahead than this is a clock that jumped back
 const REFRESH_JS = path.join(__dirname, 'refresh.js');
 
 function file(p, key) { return path.join(p.cacheDir, key + '.json'); }
@@ -39,9 +40,18 @@ function read(p, key) { return readQuiet(file(p, key)); }
 function readAttempt(p, key) { return readQuiet(attemptFile(p, key)); }
 function writeAttempt(p, key, a) { writeFileAtomic(attemptFile(p, key), JSON.stringify(a)); }
 
-function writeRecord(p, key, five, seven, nowSec) {
-  const out = { key: key, status: 'ok', fetched_at: nowSec, five_hour: five, seven_day: seven };
+// extra: { scoped, checked_at } from a background check, kept across session writes.
+function writeRecord(p, key, five, seven, nowSec, extra) {
+  const out = Object.assign({ key: key, status: 'ok', fetched_at: nowSec, five_hour: five, seven_day: seven }, extra || {});
   writeFileAtomic(file(p, key), JSON.stringify(out));
+  return out;
+}
+
+// What a session's live write must not lose: only a background check knows these.
+function checkFields(prev) {
+  const out = {};
+  if (prev && Array.isArray(prev.scoped)) out.scoped = prev.scoped;
+  if (prev && prev.checked_at != null) out.checked_at = prev.checked_at;
   return out;
 }
 
@@ -56,7 +66,7 @@ function writeActive(p, key, prev, live, nowSec) {
     return prev;
   }
   try {
-    return writeRecord(p, key, live.five, live.seven, nowSec);
+    return writeRecord(p, key, live.five, live.seven, nowSec, checkFields(prev));
   } catch (e) {
     return prev; // the record is an optimisation, never a dependency
   }
@@ -105,7 +115,8 @@ function settleActive(p, key, prev, live, session, nowSec) {
   const st = session ? readSession(p, session.id) : null;
   try {
     if (st && st.api_ms === session.apiMs) {
-      const later = prev && prev.fetched_at != null && prev.fetched_at > st.reply_at;
+      const replyAt = st.reply_at > nowSec + FUTURE ? 0 : st.reply_at;
+      const later = prev && prev.fetched_at != null && prev.fetched_at > replyAt;
       return { rec: prev, show: later ? null : live };
     }
     if (st) {
@@ -113,14 +124,14 @@ function settleActive(p, key, prev, live, session, nowSec) {
       writeSession(p, session.id, { api_ms: session.apiMs, reply_at: nowSec });
       return { rec: rec, show: live };
     }
-    const fresh = !prev ||
+    const isNew = !prev ||
       (newer(live.five, prev.five_hour) === live.five && newer(live.seven, prev.seven_day) === live.seven);
-    const rec = fresh ? writeActive(p, key, prev, live, nowSec) : prev;
+    const rec = isNew ? writeActive(p, key, prev, live, nowSec) : prev;
     if (session) {
       pruneSessions(p, nowSec);
-      writeSession(p, session.id, { api_ms: session.apiMs, reply_at: fresh ? nowSec : 0 });
+      writeSession(p, session.id, { api_ms: session.apiMs, reply_at: isNew ? nowSec : 0 });
     }
-    return { rec: rec, show: fresh ? live : null };
+    return { rec: rec, show: isNew ? live : null };
   } catch (e) {
     return { rec: prev, show: live }; // the state is an optimisation, never a dependency
   }
@@ -139,21 +150,45 @@ function rollForward(c, nowSec) {
     const weeks = Math.floor((nowSec - s.resets_at) / WEEK) + 1;
     out.seven_day = { utilization: 0, resets_at: s.resets_at + weeks * WEEK };
   }
+  if (Array.isArray(c.scoped)) {
+    out.scoped = c.scoped.map(function (r) {
+      if (!r || r.resets_at == null || r.resets_at > nowSec) return r;
+      const weeks = Math.floor((nowSec - r.resets_at) / WEEK) + 1;
+      return { name: r.name, utilization: 0, resets_at: r.resets_at + weeks * WEEK };
+    });
+  }
   return out;
+}
+
+// A stored time counts only while it is at most `span` old and not more than FUTURE seconds ahead: a
+// clock that was ahead and got corrected would otherwise stop every check until it caught up.
+function fresh(at, nowSec, span) {
+  return at != null && nowSec - at <= span && at <= nowSec + FUTURE;
+}
+
+// The last attempt allows another check: 30 min after one that worked, 60 after a failure.
+function attemptAllows(p, key, nowSec) {
+  const a = readAttempt(p, key);
+  return !(a && fresh(a.at, nowSec, a.ok ? RETRY_OK : RETRY_FAILED));
 }
 
 // Called on every render for each other account: the attempt file is read only once
 // the record is old.
 function fetchDue(p, key, c, nowSec) {
-  if (c && c.fetched_at != null && nowSec - c.fetched_at <= FETCH_AFTER) return false;
-  const a = readAttempt(p, key);
-  if (a && a.at != null && nowSec - a.at <= (a.ok ? RETRY_OK : RETRY_FAILED)) return false;
-  return true;
+  if (c && fresh(c.fetched_at, nowSec, FETCH_AFTER)) return false;
+  return attemptAllows(p, key, nowSec);
 }
 
-function spawnFetch(acct, env) {
+// The active account's own session keeps fetched_at fresh, so its checks (only for
+// per-model rows) are paced by when a check last worked.
+function checkDue(p, key, c, nowSec) {
+  if (c && fresh(c.checked_at, nowSec, FETCH_AFTER)) return false;
+  return attemptAllows(p, key, nowSec);
+}
+
+function spawnFetch(acct, env, mode) {
   try {
-    const child = cp.spawn(process.execPath, [REFRESH_JS, acct.key, acct.dir], {
+    const child = cp.spawn(process.execPath, [REFRESH_JS, acct.key, acct.dir].concat(mode === 'scoped' ? ['scoped'] : []), {
       detached: true,
       cwd: os.tmpdir(), // not the session's project: Windows would keep that folder in use
       stdio: 'ignore',
@@ -167,8 +202,8 @@ function spawnFetch(acct, env) {
 }
 
 module.exports = {
-  WRITE_MIN_INTERVAL, FETCH_AFTER, RETRY_OK, RETRY_FAILED, SESSION_TTL,
+  WRITE_MIN_INTERVAL, FETCH_AFTER, RETRY_OK, RETRY_FAILED, SESSION_TTL, FUTURE,
   file, attemptFile, accountDir, read, readAttempt, writeAttempt, writeRecord, writeActive,
   newer, sessionFile, readSession, writeSession, pruneSessions, settleActive,
-  rollForward, fetchDue, spawnFetch,
+  rollForward, fresh, attemptAllows, fetchDue, checkDue, spawnFetch,
 };

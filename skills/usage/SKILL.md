@@ -2,7 +2,7 @@
 description: Control what usage the status line shows - hide or show all numbers, show only this session's account or every account, or reset to defaults.
 argument-hint: "[hide|show|active|all|reset]"
 disable-model-invocation: true
-allowed-tools: Bash(node:*)
+allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js" *)
 ---
 
 Run:

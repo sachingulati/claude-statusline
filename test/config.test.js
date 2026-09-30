@@ -164,8 +164,8 @@ test('display set: templates are checked before anything is written', () => {
   try {
     assert.equal(config.set(t.p, 'display.line1', '{model} · {dir}[ ({branch})]'), '{model} · {dir}[ ({branch})]');
     const before = fs.readFileSync(t.p.configFile, 'utf8');
-    assert.throws(() => config.set(t.p, 'display.line1', '{model} {dri}'),
-      e => e instanceof UserError && /Unknown field \{dri\} at column 9/.test(e.message) && /dir, dir\.full/.test(e.fix));
+    assert.throws(() => config.set(t.p, 'display.line1', '{model} {bad-name}'),
+      e => e instanceof UserError && /Unknown field \{bad-name\} at column 9/.test(e.message) && /dir, dir\.full/.test(e.fix));
     assert.throws(() => config.set(t.p, 'display.line1', '{dir}[ ({branch})'), /Unclosed "\[" at column 6/);
     assert.throws(() => config.set(t.p, 'display.label', '{dir}'), /Unknown field \{dir\}/);
     assert.throws(() => config.set(t.p, 'display.account', '{ctx}'), /Unknown field \{ctx\}/);
@@ -386,5 +386,39 @@ test('account add stores a clean ~/ path', () => {
     assert.equal(r.credsDir, '~/.creds-b');
     assert.equal(JSON.parse(fs.readFileSync(t.p.configFile, 'utf8')).accounts[0].credsDir, '~/.creds-b');
     assert.doesNotMatch(r.warning, /"~/); // a quoted ~ would not expand in the shell
+  } finally { t.cleanup(); }
+});
+
+test('display.thresholds.5hPace is a settable bool, default false', () => {
+  const t = tmpEnv();
+  try {
+    assert.equal(config.load(t.p).display.thresholds['5hPace'], false);
+    config.set(t.p, 'display.thresholds.5hPace', 'on');
+    assert.equal(config.load(t.p).display.thresholds['5hPace'], true);
+  } finally { t.cleanup(); }
+});
+
+test('line1 accepts Claude Code field names; undocumented ones warn, bad ones fail', () => {
+  const t = tmpEnv();
+  try {
+    config.set(t.p, 'display.line1', '{dir}[ {session_name}]');
+    assert.deepEqual(config.templateWarnings('line1', '{dir}[ {session_name}]'), []);
+    assert.deepEqual(config.templateWarnings('line1', '{made_up.thing}'),
+      ["{made_up.thing} is not a documented Claude Code field; it prints nothing if Claude Code doesn't send it"]);
+    assert.throws(() => config.set(t.p, 'display.line1', '{bad-name}'), /Unknown field \{bad-name\}/);
+    assert.throws(() => config.set(t.p, 'display.account', '{session_name}'), /Unknown field/); // line 1 only
+    assert.deepEqual(config.load(t.p).display.problems, []); // pass-through names are not doctor problems
+  } finally { t.cleanup(); }
+});
+
+test('display.width: auto (default), off, or a whole number of at least 20', () => {
+  const t = tmpEnv();
+  try {
+    assert.equal(config.load(t.p).display.width, 'auto');
+    config.set(t.p, 'display.width', '100');
+    assert.equal(config.load(t.p).display.width, 100);
+    config.set(t.p, 'display.width', 'off');
+    assert.equal(config.load(t.p).display.width, 'off');
+    assert.throws(() => config.set(t.p, 'display.width', '10'), /20/);
   } finally { t.cleanup(); }
 });
