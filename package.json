@@ -1,0 +1,12 @@
+{
+  "name": "sline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code status line with live rate limits for every account you use.",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test",
+    "validate": "claude plugin validate ."
+  }
+}

@@ -1,11 +1,11 @@
-# Personal config lives in ~/.claude, never in the repo. Guard anyway in case
-# someone copies it into the tree.
-statusline-accounts.json
-usage-cache/
-statusline-hidden
+# Personal state lives in ~/.claude/sline, never in the repo.
+config.json.local
 
 # Editor / OS noise
 node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Claude Code worktrees
+.claude/worktrees/

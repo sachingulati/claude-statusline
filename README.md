@@ -1,321 +1,182 @@
-# claude-statusline
+# sline — Claude status line
 
-A [Claude Code](https://claude.com/claude-code) status line that shows **live rate-limit
-usage for every account you're logged into — at once**, not just the one you're currently
-using. Built for people who juggle **multiple Claude subscriptions** (personal + work, two
-Max plans, a team spare) and want to see, at a glance, which account still has headroom —
-plus a one-key **toggle** to show or hide the usage numbers.
+A [Claude Code](https://claude.com/claude-code) plugin that shows **live rate limits for every
+Claude account you use** in the status line, a pace-aware weekly figure, and one command to show or
+hide the usage numbers.
 
 ```
-dir:~/projects/app (main) · model:claude-opus-4-8 · effort:high · ctx: 12% · session:340.0ktk
+dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk
 [A] 5h: 52%, 23:49 · 7d: 38% / 61%, Mon 17:29
 [B] 5h: 0%, --:-- · 7d: 81% / 58%, Mon 23:29  (3m ago)
 ```
 
-- **Line 1** — working directory + git branch, model, effort/thinking level, context-window
-  usage, and this session's token total.
-- **Line 2** — the **active** account's 5h and 7d rate limits, taken live and free from the
-  data Claude Code already hands the status line.
-- **Line 3+** — every **other** logged-in account's 5h / 7d, fetched in the background and
-  cached, with a freshness tag. The `[A]` / `[B]` label only appears when you have more than
-  one account.
+- **Line 1**: folder and git branch, model, effort, context used, this session's tokens.
+- **Line 2**: the account this session uses, live from Claude Code.
+- **Line 3+**: your other accounts, fetched in the background and cached.
 
----
+The `[A]` / `[B]` labels appear only when more than one account line is on screen. Hiding usage
+(`/sline:usage hide`) replaces lines 2+ with a dim `hidden`; line 1 stays as it is.
 
-## Table of contents
+While subagents run, each of their rows under the prompt shows its type and what it's doing,
+then its own stats:
 
-- [Why this exists](#why-this-exists)
-- [Features](#features)
-- [Reading the status line](#reading-the-status-line)
-- [Requirements & platform support](#requirements--platform-support)
-- [Install](#install)
-- [Configuration](#configuration)
-  - [Accounts](#accounts)
-  - [7-day pace & the work-week mode](#7-day-pace--the-work-week-mode)
-  - [Refresh cadence](#refresh-cadence)
-  - [Hidden marker](#hidden-marker)
-- [The `ut` hide toggle](#the-ut-hide-toggle)
-- [Updating, re-linking, uninstalling](#updating-re-linking-uninstalling)
-- [How it works](#how-it-works)
-- [Privacy & security](#privacy--security)
-- [Troubleshooting](#troubleshooting)
-- [License](#license)
+```
+○ general-purpose  Reading fsutil.js · model:Haiku 4.5 · ctx: 16% · tokens:32.4k · 1m42s
+```
 
----
+## Requirements
 
-## Why this exists
-
-Each Claude Code session only ever receives **its own** account's rate limits — a session
-signed into account A physically never sees account B's numbers. So if you run more than one
-subscription, the built-in status line can only ever tell you about the one you happen to be
-in. The moment you want to answer *"which of my accounts should I run this big job on?"* you're
-blind to all the others.
-
-This tool closes that gap. It reads each account's usage from Claude's own usage endpoint and
-shows them side by side, so you always know where every account stands without switching into
-it. The active account stays **live and free** (its numbers come straight from the session);
-the others are polled gently in the background and cached.
-
-## Features
-
-- **All accounts at a glance** — 5h and 7d rate limits for every logged-in account, on their
-  own line, colour-coded by headroom.
-- **Active account is always live** — its quota comes from the status-line payload Claude Code
-  already provides, so it's instant and costs nothing.
-- **Background, non-blocking refresh** — other accounts are fetched with a detached process
-  (stale-while-revalidate); the status line never waits on the network.
-- **Pace-aware 7-day figure** — shows used % *against* how much of the week has elapsed
-  (`38% / 61%`), so "am I burning too fast?" is obvious. Optional **work-week mode** spreads
-  the weekly quota over just your working days (e.g. Mon–Fri) — see [below](#7-day-pace--the-work-week-mode).
-- **One-key hide toggle (`ut`)** — instantly switches *every* usage number off or on;
-  also pauses background API calls while hidden.
-- **Interactive setup** — a first-run questionnaire (and a `usage-config` command) writes your
-  config for you; no hand-editing required.
-- **Run-in-place / `git pull` to update** — the code lives in the repo and `settings.json`
-  points at it, so updating is just a pull. Nothing is copied into `~/.claude`.
-- **Portable & self-contained** — pure Node + bash, no dependencies to install. One config file
-  travels with you; add or remove machines freely.
-- **Zero-config fallback** — with no config file it runs as a normal single-account status line.
-
-## Reading the status line
-
-Colours (all thresholds are in the config-free defaults):
-
-| Colour | Meaning |
-|---|---|
-| **green** | comfortable |
-| **yellow** | watch it |
-| **orange** | over pace / near the cap |
-
-Field by field:
-
-- **`5h: 52%, 23:49`** — 52% of the rolling 5-hour limit used; that window resets at 23:49.
-  The reset time turns **green** in its final hour (the wait's nearly over) and shows `--:--`
-  once there's no active window.
-- **`7d: 38% / 61%, Mon 17:29`** — 38% of the weekly limit used, versus **61% of the week
-  elapsed** (the "pace"), resetting Mon 17:29. Used < pace ⇒ you're under budget. Used > pace
-  ⇒ **orange** (burning too fast). The reset turns orange in its last 48 h.
-- **`(3m ago)`** — how old a background-fetched account line is. It stays dim while healthy; it
-  gains a yellow **`stale`** flag only when refreshes are actually *failing* (not merely old).
-
-## Requirements & platform support
-
-- **Node.js** and **bash** on `PATH`. No npm install — there are no dependencies.
-- Claude Code storing its OAuth token as **plaintext JSON** at
-  `<creds-dir>/.credentials.json`.
-
-| Platform | Status |
-|---|---|
-| **Windows** (Git Bash) | ✅ supported |
-| **Linux / WSL** | ✅ supported |
-| **macOS** | ⚠️ not yet — macOS keychains the token instead of writing `.credentials.json`, so the reader finds nothing. The extension point is a `security find-generic-password` branch in `src/usage-refresh.js`; PRs welcome. |
+- Claude Code with a claude.ai Pro or Max login (rate limits only exist for subscriptions).
+- **Node.js 18 or later** on `PATH`. Nothing else: no bash, git or npm packages.
+- Other accounts are read from `<login folder>/.credentials.json`, which Claude Code writes on
+  Windows and Linux. On macOS the token lives in the Keychain, so only the active account shows.
 
 ## Install
 
-Run-in-place: clone anywhere, and `settings.json` will point at that clone.
-
-```bash
-git clone <repo-url> ~/projects/claude-statusline
-cd ~/projects/claude-statusline
-node install.js          # or: ./install.sh   |   pwsh ./install.ps1
+```
+/plugin marketplace add sachingulati/claude-plugins
+/plugin install sline@sachingulati
+/sline:init
 ```
 
-The installer:
+Installing changes nothing by itself: run `/sline:init` once. It points `statusLine` and
+`subagentStatusLine` in `~/.claude/settings.json` at a small launcher in `~/.claude/sline/`, after backing up
+settings.json. The status line appears with the next reply. Plugin updates need nothing: open
+sessions switch to the new version within one refresh.
 
-1. Points `~/.claude/settings.json`'s `statusLine` at `src/statusline-command.sh` (saving the
-   previous value so `--uninstall` can restore it).
-2. **Runs the interactive setup** (first time, in a terminal) to write
-   `~/.claude/statusline-accounts.json` — or seeds it from the example if run non-interactively.
-3. Adds `ut` and `usage-config` aliases to your `~/.bashrc` / `~/.zshrc` in a managed block
-   (skip with `--no-alias`).
+## Commands
 
-Then start a new session — or press a key in an open one — to see it.
+| Command | Does |
+|---|---|
+| `/sline:init` | Set up the status line (safe to rerun). `--refresh <seconds>` sets how often idle sessions redraw (default 30). |
+| `/sline:config` | Show settings, or change them in plain words: "rename B to Work", "Mon-Fri work week", "hide other accounts". |
+| `/sline:usage` | `hide` / `show` every account's usage numbers (line 1 stays); `active` / `all` to show only this session's account or every account; `reset` for both defaults. Bare, it reports the current state. |
+| `/sline:doctor` | Check the setup and explain any fix. |
+| `/sline:uninstall` | Put back your previous status line before removing the plugin. |
 
-## Configuration
+Claude can also answer "which account has the most 5h left?" or "when does my weekly limit
+reset?" on its own, from the same data.
 
-Everything lives in **`~/.claude/statusline-accounts.json`** — personal, per-machine, and
-**never committed** (the repo ships `statusline-accounts.example.json`). Edit it directly, or
-re-run the questionnaire any time with **`usage-config`** (alias) / `node configure.js` /
-`node install.js --configure`.
+## Customising the display
 
-```json
-{
-  "accounts": [
-    { "label": "A", "credsDir": "~/.claude" },
-    { "label": "B", "credsDir": "~/.creds-b" }
-  ],
-  "pace":   { "workingDays": [1, 2, 3, 4, 5] },
-  "refresh": {
-    "okSeconds": 1800,
-    "idleSeconds": 3600,
-    "errorSeconds": 240,
-    "rateLimitedSeconds": 1800
-  },
-  "hidden": { "marker": "hidden" }
-}
+Every line is a template you can change with `/sline:config` in plain words ("put the model
+first", "drop effort", "red instead of orange", "12-hour clock"), or reset with
+"back to the default look".
+
+- `{field}` shows a value; only the value is coloured.
+- `[ … ]` is left out when any field inside it is empty.
+- `{sep}` prints the separator (` · ` by default) when something was printed before it and the
+  part right after it is non-empty; a `{sep}` whose next part is empty is dropped. Put each
+  `{sep}` directly before a `[ … ]` group.
+- `\[ \] \{ \} \\` print the character itself.
+
+| Line | Fields |
+|---|---|
+| Line 1 | `dir`, `dir.full`, `dir.name`, `branch`, `model`, `model.name`, `effort`, `ctx`, `session` |
+| Account label | `label` (left out when only one account line shows) |
+| Account lines | `5h`, `5h.reset`, `7d`, `7d.pace`, `7d.reset`, `spend`, `spend.reset`, `age`, `status` |
+| Subagent rows | `type`, `activity`, `model`, `model.name`, `effort`, `ctx`, `tokens`, `elapsed` |
+
+The defaults:
+
+```
+line1:   dir:{dir}[ ({branch})]{sep}[model:{model.name}]{sep}[effort:{effort}]{sep}[ctx: {ctx}]{sep}[session:{session}]
+label:   \[{label}\] 
+account: [5h: {5h}, {5h.reset}]{sep}[7d: {7d} / {7d.pace}, {7d.reset}]{sep}[spend: {spend}, {spend.reset}][{status}][  {age}]
+subagent: [{type}  ]{activity}{sep}[model:{model.name}]{sep}[effort:{effort}]{sep}[ctx: {ctx}]{sep}[tokens:{tokens}]{sep}[{elapsed}]
 ```
 
-### Accounts
+Thresholds (`ctx 30,65`, `5h`, `7d` and `spend 30,75`), the 7d pace rule, the "reset soon"
+windows (5h: 60 minutes, 7d: 48 hours), the colours (`ok`, `warn`, `high`, `dim`: a name, a
+0-255 number, `#rrggbb` or `none`) and the clock (`24h`/`12h`) are settings too. `NO_COLOR`
+turns colour off. A template that doesn't parse is refused; if one is edited into `config.json`
+by hand, that line falls back to its default and says so, and `/sline:doctor` explains.
 
-One entry per login:
+## Multiple accounts
 
-- **`label`** — the prefix shown (`[A]`). Also names the cache file.
-- **`credsDir`** — that account's credentials directory (`~` expands to home). An account whose
-  `.credentials.json` is missing is silently skipped, so it's safe to list accounts that only
-  exist on some machines.
-
-Omit the file entirely and it falls back to a single default account (`~/.claude`, no label) —
-a normal single-account status line with zero config.
-
-**How multiple accounts work.** Claude Code keeps each login's credentials in a directory chosen
-by the `CLAUDE_SECURESTORAGE_CONFIG_DIR` environment variable (default `~/.claude`). To run a
-second account you point that variable at a different dir and log in:
+Claude Code keeps each login in the folder named by `CLAUDE_SECURESTORAGE_CONFIG_DIR` (default
+`~/.claude`). To use a second account, log it into its own folder:
 
 ```bash
-# log a second account into its own creds dir
 CLAUDE_SECURESTORAGE_CONFIG_DIR="$HOME/.creds-b" claude   # then /login
-
-# a launcher alias to start it easily
 alias claudeb='CLAUDE_SECURESTORAGE_CONFIG_DIR="$HOME/.creds-b" command claude'
 ```
 
-Then add `{ "label": "B", "credsDir": "~/.creds-b" }` to the config (or run `usage-config`). The
-status line detects which account is active from that same variable and marks it on line 2.
+Start one session with it (e.g. `claudeb`) and it appears as the next letter as soon as the status line draws; your default login
+becomes `A`. Rename or forget accounts with `/sline:config`.
+The status line detects which account a session uses from the same variable.
 
-### 7-day pace & the work-week mode
+## Reading the status line
 
-The **pace** is the `/ NN%` figure next to your 7-day usage: how much of the weekly quota you'd
-have spent *by now* if you burned it evenly. It's what turns raw usage into "am I ahead or
-behind?".
+| Colour | Meaning |
+|---|---|
+| green | comfortable |
+| yellow | watch it |
+| orange | over pace or near the cap |
 
-By default the quota is spread over **all 7 calendar days**. But if you only use an account on
-working days — e.g. a work laptop you don't touch on weekends — an even 7-day spread understates
-your workday budget and makes Friday look alarming. **Work-week mode** fixes this:
+- **`5h: 52%, 23:49`**: 52% of the rolling 5-hour limit used; it resets at 23:49. The time turns
+  green in its last hour, and shows `--:--` when no window is running.
+- **`7d: 38% / 61%, Mon 17:29`**: 38% of the weekly limit used, against 61% of the week elapsed
+  (the pace). Above pace turns orange. The reset time turns orange in its last 48 hours.
+- **`spend: 64%, Thu 00:00`**: only behind a Claude apps gateway with a spend limit: how much of
+  it is used and when it resets. Orange above 75%, and past 100% once exceeded.
+- **`(3m ago)`**: age of a background-fetched line. A yellow `stale` means refreshes are failing,
+  not merely old. `auth?` means that account needs a fresh `/login`.
 
-```json
-"pace": { "workingDays": [1, 2, 3, 4, 5] }
-```
+### Work-week pace
 
-`workingDays` are day numbers, **0 = Sunday … 6 = Saturday**. With Mon–Fri set:
-
-- The weekly quota is spread across **working days only**, so on a workday you're "allowed" to
-  burn proportionally faster (5 days of budget instead of 7).
-- **Weekends accrue no allocation** — the pace holds *flat* across Sat/Sun. If you don't use the
-  account then, nothing changes; if you do, it reads as **over pace** (a nudge that you're
-  dipping into budget you didn't plan for).
-
-Anthropic's actual 7-day limit is always a rolling 7 calendar days — this setting only changes
-how the *expected* burn-down is drawn, never the real limit. Set all seven days (or omit `pace`)
-for the classic even spread. Non-Mon–Fri weeks are fully supported — e.g. `[0,1,2,3,4]` for a
-Sunday–Thursday week.
-
-### Refresh cadence
-
-How often inactive accounts are polled in the background, in seconds. The active account is
-never polled (it's live from the session), so these only govern the *other* lines.
-
-| Key | Default | When it applies |
-|---|---|---|
-| `okSeconds` | 1800 (30 min) | normal cadence |
-| `idleSeconds` | 3600 (1 h) | account reading exactly 0% — nothing to watch |
-| `errorSeconds` | 240 (4 min) | after a transient failure, to recover quickly |
-| `rateLimitedSeconds` | 1800 | after a 429 (keep ≥ `okSeconds`) |
-
-Defaults are deliberately relaxed: normally only one account is active at a time, so the others'
-quota is essentially frozen. A window whose reset time has passed always forces an early refresh
-regardless, so staleness stays bounded.
-
-### Hidden marker
-
-`hidden.marker` is the dim text shown on line 1 while usage is hidden (see below). Set it to
-`""` to show nothing at all.
-
-## The `ut` hide toggle
-
-A flag file `~/.claude/statusline-hidden` suppresses **everything numeric** —
-context %, session tokens, all rate limits, and even the fact that multiple accounts exist. Only
-`dir / model / effort` remain (plus the dim marker), and **no background API calls fire** while
-hidden. It takes effect on the next render, across every open session at once.
-
-The installer adds a **`ut`** alias that flips it either way and prints the new state:
-
-```bash
-ut               # -> "usage: HIDDEN"  /  "usage: visible"
-node toggle.js   # the same toggle for PowerShell / other shells
-```
-
-`ut` is self-contained (just the flag file — no Node, survives moving the repo). The managed rc
-block also defines **`usage-config`** to re-run the config questionnaire.
-
-## Updating, re-linking, uninstalling
-
-- **Update:** `git pull` in the repo. Live immediately — nothing to re-run, because
-  `settings.json` points at the repo rather than a copy.
-- **Moved the clone?** `node install.js` (a.k.a. `--relink`) re-points the path and refreshes
-  the rc aliases.
-- **Change config:** `usage-config` (or `node install.js --configure`).
-- **Uninstall:** `node install.js --uninstall` restores the previous `statusLine` and removes
-  the rc alias block. Your config, cache, and credentials are left untouched.
+If you only use an account on working days, "Mon-Fri work week" in `/sline:config` spreads
+the weekly quota over those days. Weekends then accrue nothing, so the pace holds still and any
+weekend use shows as over pace. Anthropic's real limit is always a rolling 7 days; this only
+changes the expected burn-down.
 
 ## How it works
 
-- **Data source.** For non-active accounts, `src/usage-refresh.js` calls
-  `GET /api/oauth/usage` — the same endpoint the `/usage` command reads — using each account's
-  OAuth token. It's a plain read that **does not consume model quota**.
-- **Stale-while-revalidate.** `src/statusline-render.js` reads the per-account cache instantly
-  and, when an entry is due, spawns the refresher **detached** so the render never blocks. The
-  next render picks up the fresh value.
-- **Active vs. others.** The active account (detected from `CLAUDE_SECURESTORAGE_CONFIG_DIR`)
-  takes its numbers straight from the status-line payload — free and instant. Only the others
-  hit the endpoint.
-- **The active account writes its own cache.** Those free live figures are also saved back to
-  its cache entry (throttled to at most once a minute). So the moment you switch accounts, the
-  one you just left shows the quota it *really* ended on, instead of a snapshot frozen at
-  whenever it was last polled — which, for a long session, could be an hour stale.
-- **`stale` means failing, not old.** Because refresh intervals vary and an idle machine simply
-  doesn't re-render, "old" data is normal. The `stale` flag appears only when the *last attempt
-  failed* (`status !== ok`) — a precise signal that something's actually wrong.
+- Claude Code runs `node "<home>/.claude/sline/launch.js"` (a full path; `<home>` is your home
+  folder). The launcher reads the current plugin folder from `~/.claude/sline/root` and renders
+  from there. After a plugin update it finds
+  the new folder in Claude Code's install record and repoints itself, so settings.json never goes
+  stale. The plugin has no hooks; nothing runs when a session starts.
+- Subagent rows come from Claude Code's `subagentStatusLine` setting, which runs the same
+  launcher with a `subagents` argument once per refresh. Claude Code passes each session only its
+  own rows. The agent type isn't in that data, so it's read from the small `agent-<id>.meta.json`
+  Claude Code keeps next to the session transcript; if that file is missing, the row just has no
+  type. If anything fails, Claude Code's own row stays.
+- The active account's numbers come from the data Claude Code hands the status line: free and
+  instant. They're also saved to its cache, so after you switch accounts it shows where it really
+  ended.
+- Other accounts are fetched from `GET /api/oauth/usage` (the endpoint `/usage` uses; it does not
+  consume quota) by a detached background process. The status line never waits on the network.
+- `refreshInterval` makes idle sessions redraw every 30 s. Without it Claude Code only redraws
+  after a reply, and an idle session would keep showing other accounts' old numbers.
 
-### Files
+Files, all under `~/.claude/sline/` (or `$CLAUDE_CONFIG_DIR/sline/`):
 
-| In the repo (shared, versioned) | |
+| File | |
 |---|---|
-| `src/statusline-command.sh` | bash entry point wired into `settings.json` |
-| `src/statusline-render.js` | renders the lines; reads cache, spawns refreshes |
-| `src/usage-refresh.js` | fetches one account's quota into the cache |
-| `src/config.js` | shared config + path resolution |
-| `install.js` · `configure.js` · `toggle.js` | installer, config questionnaire, hide toggle |
+| `launch.js`, `root` | launcher and plugin pointer |
+| `config.json` | accounts and settings |
+| `cache/*.json` | usage per account (percentages and reset times only, no tokens) |
+| `hidden` | present while usage is hidden |
+| `install.json` | your previous status line and subagent rows, for uninstall |
 
-| On each machine (personal, not committed) | |
-|---|---|
-| `~/.claude/statusline-accounts.json` | your accounts + tuning |
-| `~/.claude/usage-cache/*.json` | background-fetched quota |
-| `~/.claude/statusline-hidden` | presence = usage hidden |
+## Privacy and security
 
-## Privacy & security
+- Tokens are read, never written or refreshed, and only sent to Anthropic's own API.
+- `/api/oauth/usage` is undocumented and may change; if it does, the affected line shows
+  `usage:--` and the rest keeps working.
 
-- **Tokens never leave your machine** except in the `Authorization` header of the request to
-  Anthropic's own API — the same place Claude Code already sends them.
-- The tool **only reads** credential files; it never writes or refreshes them. An expired token
-  shows `[X] auth?` and is left for a real Claude session to re-authenticate, so this tool can
-  never race or corrupt your login.
-- Cache files hold only utilization percentages and reset times — no tokens.
-- `GET /api/oauth/usage` is **undocumented / internal** and may change or disappear in a future
-  Claude Code release. If it does, the affected line degrades to `usage:--` or a stale marker —
-  the status line never breaks.
+## Development
 
-## Troubleshooting
+```bash
+node --test                          # all tests, no dependencies
+claude plugin validate .             # plugin manifest and skills
+claude --plugin-dir .                # run Claude Code with this checkout loaded in place
+```
 
-- **`[B] auth?`** — that account's token is expired. Start a session as that account and
-  `/login`.
-- **`[B] usage:--`** — no cache yet (first run) or the fetch is failing. Check that
-  `<credsDir>/.credentials.json` exists and Node is on `PATH`.
-- **A second account never shows** — its `.credentials.json` is missing, or `credsDir` doesn't
-  match where you logged it in.
-- **Nothing changed after `git pull`** — the status line only re-renders on activity; press a
-  key in an open session or start a new one.
-- **`ut` says "command not found"** — open a new shell or `source ~/.bashrc` so the alias loads.
+Use a throwaway `CLAUDE_CONFIG_DIR` when trying `/sline:init`, so your real settings.json
+stays untouched.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). (Swap the copyright holder if you fork it.)
+MIT, see [LICENSE](LICENSE).

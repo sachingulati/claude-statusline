@@ -1,9 +1,6 @@
-# Shell scripts and JS MUST be LF or they break when checked out on Linux/WSL
-# (a CRLF in a shebang or command makes bash fail with '\r' errors).
+# JS, JSON and Markdown must be LF: the launcher template is compared byte-for-byte
+# with the copy in the state folder, and a CRLF shebang breaks on Linux/macOS.
 * text=auto eol=lf
-*.sh text eol=lf
 *.js text eol=lf
 *.json text eol=lf
 *.md text eol=lf
-# PowerShell is Windows-native; keep CRLF.
-*.ps1 text eol=crlf

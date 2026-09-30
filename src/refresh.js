@@ -2,9 +2,9 @@
 'use strict';
 // Fetch live rate-limit usage for ONE Claude account and cache it.
 //
-//   node usage-refresh.js <key> <credentials-dir>
+//   node refresh.js <key> <credentials-dir>
 //
-// Called detached by statusline-render.js; never runs in the status line's
+// Called detached by cache.js during a render; never runs in the status line's
 // critical path. Writes <cache-dir>/<key>.json atomically.
 //
 // GET /api/oauth/usage is the same endpoint the /usage command reads. It is a
@@ -20,14 +20,16 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const C = require('./config.js');
+const paths = require('./paths');
+const config = require('./config');
 
+const P = paths.resolve(process.env);
 const KEY = process.argv[2];
-const CREDS_DIR = C.expandHome(process.argv[3]);
+const CREDS_DIR = paths.expandHome(process.argv[3], P.home);
 if (!KEY || !CREDS_DIR) process.exit(1);
 
-const cfg = C.load();
-const CACHE_DIR = C.CACHE_DIR;
+const cfg = config.load(P);
+const CACHE_DIR = P.cacheDir;
 const CACHE = path.join(CACHE_DIR, KEY + '.json');
 const LOCK = path.join(CACHE_DIR, KEY + '.lock');
 
@@ -118,7 +120,7 @@ function main() {
     headers: {
       'Authorization': 'Bearer ' + token,
       'anthropic-beta': 'oauth-2025-04-20',
-      'User-Agent': 'claude-cli-statusline',
+      'User-Agent': 'claude-cli-sline',
       'Accept': 'application/json',
     },
   }, function (res) {

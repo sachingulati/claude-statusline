@@ -1,0 +1,149 @@
+'use strict';
+// Builds the status line.
+//
+// Line 1  this session: folder, branch, model, effort, context, tokens (display.line1)
+// Line 2  [active account] 5h, 7d, spend  live from stdin, also written to its cache
+// Line 3+ other accounts from cache, refreshed in the background when due
+//         (display.label + display.account)
+//
+// While <stateDir>/hidden exists, lines 2+ become the hidden marker and nothing is fetched.
+// A session whose login folder isn't configured yet registers it here (spec §3a).
+
+const fs = require('fs');
+const paths = require('./paths');
+const config = require('./config');
+const git = require('./git');
+const F = require('./format');
+const L = require('./lines');
+const accounts = require('./accounts');
+const cache = require('./cache');
+
+function isHidden(p) {
+  try { return fs.existsSync(p.hiddenFlag); } catch (e) { return false; }
+}
+
+// What an other-account line has to show, from its cache entry.
+function otherData(c, nowSec) {
+  if (c && c.status === 'auth') return { status: 'auth' };
+  if (!c || !c.five_hour) return { status: 'nodata' };
+  return {
+    five: c.five_hour,
+    seven: c.seven_day,
+    age: c.fetched_at != null ? { seconds: nowSec - c.fetched_at, failing: c.status != null && c.status !== 'ok' } : null,
+  };
+}
+
+// The status line inherits the session's environment, so it sees which login folder
+// the session uses. Checking is in memory; the disk is touched only for a new folder.
+function loadRegistered(p, env) {
+  const cfg = config.load(p);
+  const loginDir = paths.loginDir(p, env);
+  if (config.knows(cfg, loginDir)) return cfg;
+  try {
+    if (config.registerFolder(p, loginDir).added.length) return config.load(p);
+  } catch (e) { /* broken config.json: never overwrite it; doctor reports it */ }
+  return cfg;
+}
+
+function render(payload, opts) {
+  opts = opts || {};
+  const env = opts.env || process.env;
+  const now = opts.now != null ? opts.now : Date.now();
+  const nowSec = Math.floor(now / 1000);
+  const spawn = opts.spawn || function (acct) { cache.spawnRefresh(acct, env); };
+  const p = paths.resolve(env);
+  const cfg = loadRegistered(p, env);
+  const d = payload && typeof payload === 'object' ? payload : {};
+  const lines = [];
+
+  const disp = cfg.display;
+  const style = F.makeStyle(disp, env);
+  const cwd = (d.workspace && d.workspace.current_dir) || d.cwd || process.cwd();
+  const v1 = L.line1(d, cwd, p.home, git.branch(cwd), style);
+  const line1 = L.drawLine(disp.templates.line1, v1, style, disp.separator);
+  // A valid template can still render blank for this payload; the status line always needs a line 1.
+  lines.push(line1 === '' ? L.drawLine(L.defaultDisplay().templates.line1, v1, style, disp.separator) : line1);
+
+  // Hiding covers account usage only; line 1 is about this session and stays.
+  if (isHidden(p)) {
+    if (cfg.hiddenMarker) lines.push(F.paint(style, 'dim', cfg.hiddenMarker));
+  } else {
+    quotaLines(d, p, cfg, env, now, nowSec, spawn, style).forEach(function (l) { if (l !== '') lines.push(l); });
+  }
+
+  if (env.RECAP) lines.push(env.RECAP);
+  return lines.join('\n') + '\n';
+}
+
+function quotaLines(d, p, cfg, env, now, nowSec, spawn, style) {
+  const all = cfg.accounts;
+  const present = accounts.present(all);
+  const activeKey = accounts.activeKey(present, all, paths.loginDir(p, env));
+  const active = all.find(function (a) { return a.key === activeKey; });
+  const isPresent = function (a) { return present.some(function (x) { return x.key === a.key; }); };
+  const shown = isPresent(active) ? present : present.concat([active]);
+  // Label lines only when more than one account line is actually on screen.
+  const multi = cfg.display.otherAccounts && shown.length > 1;
+
+  const caches = {};
+  shown.forEach(function (a) { caches[a.key] = cache.read(p, a.key); });
+
+  const rl = d.rate_limits || {};
+  const five = rl.five_hour || {};
+  const seven = rl.seven_day || {};
+  // Rate limits appear only after the session's first API response.
+  const stdinHasLimits = five.used_percentage != null;
+
+  shown.forEach(function (a) {
+    if (a.key === activeKey) { if (stdinHasLimits) return; }
+    else if (!cfg.display.otherAccounts) return;
+    if (!isPresent(a)) return; // no credentials: nothing to fetch with
+    if (cache.isDue(caches[a.key], nowSec)) spawn(a);
+  });
+
+  let fh = five.used_percentage;
+  let fhRst = five.resets_at;
+  let sd = seven.used_percentage;
+  let sdRst = seven.resets_at;
+
+  if (stdinHasLimits) {
+    caches[activeKey] = cache.writeActive(p, activeKey, caches[activeKey], {
+      five: fh != null ? { utilization: fh, resets_at: fhRst != null ? fhRst : null } : null,
+      seven: sd != null ? { utilization: sd, resets_at: sdRst != null ? sdRst : null } : null,
+    }, cfg.refresh, nowSec);
+  }
+
+  const ac = caches[activeKey];
+  if (fh == null && ac && ac.five_hour) { fh = ac.five_hour.utilization; fhRst = ac.five_hour.resets_at; }
+  if (sd == null && ac && ac.seven_day) { sd = ac.seven_day.utilization; sdRst = ac.seven_day.resets_at; }
+
+  const disp = cfg.display;
+  const wd = cfg.pace.workingDays;
+  // Behind a Claude apps gateway the payload can carry a spend limit, possibly without 5h/7d.
+  const spend = rl.spend_limit && rl.spend_limit.used_percentage != null ? rl.spend_limit : null;
+  const live = {
+    five: fh != null ? { utilization: fh, resets_at: fhRst != null ? fhRst : null } : null,
+    seven: sd != null ? { utilization: sd, resets_at: sdRst != null ? sdRst : null } : null,
+    spend: spend,
+  };
+
+  const out = [];
+  if (live.five || live.seven || live.spend) {
+    out.push(L.drawAccount(disp, multi ? active.label : null, L.account(live, now, wd, style), style));
+  }
+  if (disp.otherAccounts) {
+    present.forEach(function (a) {
+      if (a.key === activeKey) return;
+      out.push(L.drawAccount(disp, multi ? a.label : null, L.account(otherData(caches[a.key], nowSec), now, wd, style), style));
+    });
+  }
+  return out;
+}
+
+function run(stdinText, opts) {
+  let payload = {};
+  try { payload = JSON.parse(stdinText || '{}') || {}; } catch (e) { payload = {}; }
+  return render(payload, opts);
+}
+
+module.exports = { render, run };
