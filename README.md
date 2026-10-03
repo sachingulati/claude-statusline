@@ -37,7 +37,7 @@ then its own stats:
 ## Install
 
 ```
-/plugin marketplace add sachingulati/claude-plugins
+/plugin marketplace add https://github.com/sachingulati/claude-plugins.git
 /plugin install sline@sachingulati
 /sline:init
 ```
