@@ -122,7 +122,7 @@ test('config: display values pass through as one argument; samples; reset displa
     const r = sl(t, ['config', 'set', 'display.label', tpl, '--json']);
     assert.equal(r.code, 0);
     assert.equal(r.json.result.value, tpl);
-    assert.equal(r.json.result.sample.length, 4);
+    assert.equal(r.json.result.sample.length, 5);
     assert.match(r.json.result.sample[1], /^\[A\] 5h: 52%/);
     assert.equal(sl(t, ['config', 'set', 'display.separator', ' · ', '--json']).json.result.value, ' · ');
     assert.equal(JSON.parse(fs.readFileSync(t.p.configFile, 'utf8')).display.label, tpl);
@@ -135,7 +135,7 @@ test('config: display values pass through as one argument; samples; reset displa
     sl(t, ['config', 'set', 'display.clock', '12h']);
     const reset = sl(t, ['config', 'reset', 'display', '--json']);
     assert.equal(reset.code, 0);
-    assert.equal(reset.json.result.sample.length, 4);
+    assert.equal(reset.json.result.sample.length, 5);
     assert.equal(JSON.parse(fs.readFileSync(t.p.configFile, 'utf8')).display, undefined);
     assert.match(sl(t, ['config', 'show']).out, /Sample\n.*dir:~\/projects\/app/);
     assert.equal(sl(t, ['config', 'reset', 'nope', '--json']).code, 1);
@@ -218,4 +218,22 @@ test('childEnv drops the real session\'s pointers and cannot launch a real claud
     keep.forEach(([k, v]) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; });
     t.cleanup();
   }
+});
+
+test('config set turnLine on|off installs and removes the Stop hook; show and doctor report it', () => {
+  const t = tmpEnv();
+  try {
+    sl(t, ['init']);
+    const off = sl(t, ['config', 'show', '--json']).json.result.rows.find(r => r.key === 'turnLine');
+    assert.deepEqual(off, { key: 'turnLine', value: 'off', origin: 'default' });
+    assert.equal(sl(t, ['config', 'set', 'turnLine', 'on', '--json']).json.result.turnLine, 'on');
+    const s = JSON.parse(fs.readFileSync(t.p.settingsFile, 'utf8'));
+    assert.match(s.hooks.Stop[0].hooks[0].command, /launch\.js" turn$/);
+    assert.deepEqual(sl(t, ['config', 'show', '--json']).json.result.rows.find(r => r.key === 'turnLine'),
+      { key: 'turnLine', value: 'on', origin: 'settings.json' });
+    assert.ok(sl(t, ['doctor', '--json']).json.result.checks.some(c => c.id === 'turnLine' && c.level === 'ok'));
+    assert.equal(sl(t, ['config', 'set', 'turnLine', 'off', '--json']).json.result.turnLine, 'off');
+    assert.equal(JSON.parse(fs.readFileSync(t.p.settingsFile, 'utf8')).hooks, undefined);
+    assert.equal(sl(t, ['config', 'set', 'turnLine', 'maybe', '--json']).code, 1);
+  } finally { t.cleanup(); }
 });

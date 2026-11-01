@@ -255,3 +255,45 @@ test('settings.json holding null or an array is left untouched', () => {
     });
   } finally { t.cleanup(); }
 });
+
+const USER_STOP = { hooks: [{ type: 'command', command: 'notify.ps1', async: true }] };
+
+test('setTurn on adds our Stop hook beside the user\'s, once; off takes only ours away', () => {
+  const t = tmpEnv();
+  try {
+    writeJson(t.p.settingsFile, { theme: 'dark', hooks: { Stop: [USER_STOP], UserPromptSubmit: [USER_STOP] } });
+    assert.equal(settings.isTurnOn(settings.read(t.p), t.p), false);
+    const on = settings.setTurn(t.p, true);
+    assert.equal(on.changed, true);
+    assert.ok(on.backup);
+    let s = readSettings(t);
+    assert.deepEqual(s.hooks.Stop[0], USER_STOP);
+    assert.deepEqual(s.hooks.Stop[1], { hooks: [{ type: 'command', command: settings.command(t.p) + ' turn', timeout: 10 }] });
+    assert.equal(settings.isTurnOn(s, t.p), true);
+    assert.equal(settings.setTurn(t.p, true).changed, false);
+    assert.equal(backups(t).length, 1);
+
+    const off = settings.setTurn(t.p, false);
+    assert.equal(off.changed, true);
+    s = readSettings(t);
+    assert.deepEqual(s.hooks, { Stop: [USER_STOP], UserPromptSubmit: [USER_STOP] });
+    assert.equal(s.theme, 'dark');
+    assert.equal(settings.setTurn(t.p, false).changed, false);
+  } finally { t.cleanup(); }
+});
+
+test('setTurn off leaves no empty hooks behind; restore takes the turn hook away too', () => {
+  const t = tmpEnv();
+  try {
+    writeJson(t.p.settingsFile, {});
+    settings.setTurn(t.p, true);
+    settings.setTurn(t.p, false);
+    assert.deepEqual(readSettings(t), {});
+    settings.install(t.p);
+    settings.setTurn(t.p, true);
+    settings.restore(t.p);
+    const s = readSettings(t);
+    assert.equal(s.hooks, undefined);
+    assert.equal(s.statusLine, undefined);
+  } finally { t.cleanup(); }
+});

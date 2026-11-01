@@ -10,6 +10,8 @@
 //
 // "launch.js subagents" (settings.json subagentStatusLine) draws the agent panel's rows
 // through src/subagents.js instead. Its output must be JSON rows, so it never prints a message.
+// "launch.js turn" (the Stop hook /sline:config turnLine on adds) prints the turn line through
+// src/turn.js. Its output must be the hook's JSON, so it never prints a message either.
 
 const fs = require('fs');
 const path = require('path');
@@ -79,20 +81,22 @@ function follow(root) {
   return root;
 }
 
+const ENTRY = { subagents: 'subagents.js', turn: 'turn.js' };
+
 function main(input, mode) {
-  const rows = mode === 'subagents';
+  const quiet = Object.prototype.hasOwnProperty.call(ENTRY, mode);
   let root = '';
   try { root = fs.readFileSync(ROOT_FILE, 'utf8').trim(); } catch (e) { root = ''; }
   if (root) root = follow(root);
-  const entry = root ? path.join(root, 'src', rows ? 'subagents.js' : 'render.js') : '';
+  const entry = root ? path.join(root, 'src', quiet ? ENTRY[mode] : 'render.js') : '';
   if (!entry || !fs.existsSync(entry)) {
-    if (!rows) say('plugin files not found; run /sline:init or /sline:doctor');
+    if (!quiet) say('plugin files not found; run /sline:init or /sline:doctor');
     return;
   }
   try {
     process.stdout.write(require(entry).run(input));
   } catch (e) {
-    if (!rows) say('error: ' + String((e && e.message) || e).split('\n')[0]);
+    if (!quiet) say('error: ' + String((e && e.message) || e).split('\n')[0]);
   }
 }
 

@@ -1,5 +1,5 @@
 ---
-description: Show or change SLine settings - accounts, what each line shows and in what order, colours and when they change, clock, work-week pace, refresh timing, hidden marker.
+description: Show or change SLine settings - accounts, what each line shows and in what order, the turn line under each response (on/off and its fields), colours and when they change, clock, work-week pace, refresh timing, hidden marker.
 argument-hint: "[what to change, in plain words]"
 disable-model-invocation: true
 allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/cli/sl.js" *)
@@ -36,6 +36,8 @@ Map the request to one or more of these calls, run them, then show the result:
 | what each account line shows, or its order | `config set display.account --stdin` (heredoc) |
 | how the account label looks | `config set display.label --stdin` (heredoc) |
 | what each subagent row shows, or its order | `config set display.subagent --stdin` (heredoc) |
+| turn line under each response on / off (hide it) | `config set turnLine on` / `config set turnLine off` |
+| what the turn line shows, or its order | `config set display.turn --stdin` (heredoc) |
 | the separator between parts | `config set display.separator --stdin` (heredoc) |
 | when a figure turns yellow / orange | `config set display.thresholds.<ctx\|5h\|7d\|spend> <low>,<high>` (0-100) |
 | 7d orange when ahead of pace, on/off | `config set display.thresholds.7dPace true\|false` |
@@ -55,10 +57,11 @@ Map the request to one or more of these calls, run them, then show the result:
 ### Templates
 
 - `{field}` is a value; only the value is coloured. `[ … ]` is dropped when any field inside it is empty. `{sep}` prints the separator when something was printed before it and the part right after it is non-empty (not allowed inside `[ ]`); a `{sep}` whose next part is empty is dropped, so put each `{sep}` directly before a `[ … ]` group. `\[ \] \{ \} \\` print the character.
-- Line 1 fields: `dir` (`~/projects/app`), `dir.full`, `dir.name` (`app`), `branch`, `model` (`claude-opus-5-5`), `model.name` (`Opus 5.5`), `effort`, `ctx`, `session`.
+- Line 1 fields: `dir` (`~/projects/app`), `dir.full`, `dir.name` (`app`), `branch`, `model` (`claude-opus-5-5`), `model.name` (`Opus 5.5`), `effort`, `ctx`, `session`, `cost` (this session's cost, `$4.12`), `turn.cost` and `turn.ctx` (the last turn's cost and context added, while the turn line is on).
 - Label field: `label` (the whole label template is left out when only one account line shows).
 - Account fields: `5h`, `5h.reset`, `5h.pace`, `7d`, `7d.pace`, `7d.reset`, `7d.model` (per-model weekly rows such as `Fable 42%`, from background checks; empty on plans without them), `7d.model.reset` (the earliest of their resets), `spend`, `spend.reset`, `age`, `status`.
-- Subagent row fields (the rows under the prompt while subagents run): `type` (`general-purpose`), `activity` (the live text, e.g. `Reading fsutil.js`), `model` (`claude-haiku-4-5-20251001`), `model.name` (`Haiku 4.5`), `effort` (only when the subagent sets its own), `ctx`, `tokens`, `elapsed` (only while running). The sample's last line, starting `○`, is a subagent row.
+- Subagent row fields (the rows under the prompt while subagents run): `type` (`general-purpose`), `activity` (the live text, e.g. `Reading fsutil.js`), `model` (`claude-haiku-4-5-20251001`), `model.name` (`Haiku 4.5`), `effort` (only when the subagent sets its own), `ctx`, `tokens`, `elapsed` (only while running). The sample's line starting `○` is a subagent row.
+- Turn line fields (the line under each response while the turn line is on; the sample's last line): `duration` (`1m 43s`; not in the default, since Claude Code shows how long the turn took), `ctx` (context added and its share of the window, `+12.4k (6%)`), `ctx.total` (`86k`), `ctx.pct` (`43%`), `in`, `out`, `cacheRead`, `cacheWrite`, `hit` (cache hit ratio), `thinking`, `calls` (`9 calls`), `tools` (`Read 4, Bash 3`), `lines.added`, `lines.removed`, `cost` (`$0.41`; a trailing `+` means part of it is not known yet), `note` (`interrupted`).
 - Change the **current** template minimally: read it from `config show`, then e.g. to drop effort remove `{sep}[effort:{effort}]`; to put the model first move `[model:{model.name}]{sep}` to the front.
 - Before a template change, show the current template and `result.sample` from `config show`; after `config set`, show the new template and the new `result.sample`.
 

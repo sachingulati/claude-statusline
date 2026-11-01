@@ -242,7 +242,7 @@ test('resetDisplay keeps otherAccounts; show carries a plain sample', () => {
     assert.deepEqual(config.resetDisplay(t.p), { reset: 'display' });
     assert.deepEqual(JSON.parse(fs.readFileSync(t.p.configFile, 'utf8')).display, { otherAccounts: false });
     const s = config.show(t.p);
-    assert.equal(s.sample.length, 3); // only the active account, so no [A] label
+    assert.equal(s.sample.length, 4); // only the active account, so no [A] label
     assert.doesNotMatch(s.sample[1], /\[A\]/);
     assert.match(s.sample[0], /^dir:~\/projects\/app \(main\)/);
     assert.deepEqual(s.rows.find(r => r.key === 'display.clock'), { key: 'display.clock', value: '24h', origin: 'default' });

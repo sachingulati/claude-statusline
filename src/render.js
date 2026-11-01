@@ -19,6 +19,8 @@ const F = require('./format');
 const L = require('./lines');
 const accounts = require('./accounts');
 const cache = require('./cache');
+const history = require('./history');
+const turn = require('./turn');
 
 function isHidden(p) {
   try { return fs.existsSync(p.hiddenFlag); } catch (e) { return false; }
@@ -65,7 +67,10 @@ function render(payload, opts) {
   const hidden = isHidden(p);
   // Hiding usage covers the usage fields a line 1 template can name, too.
   const d1 = hidden && d.rate_limits !== undefined ? Object.assign({}, d, { rate_limits: undefined }) : d;
-  const v1 = L.withPassThrough(L.line1(d, cwd, p.home, git.branch(cwd), style), d1, disp.templates.line1.parts, now, style.clock);
+  // The cost after each reply, for the turn line; the last turn only when line 1 shows it.
+  history.record(p, d, now);
+  const last = L.usesTurn(disp.templates.line1) ? turn.readLast(p, d.session_id) : null;
+  const v1 = L.withPassThrough(L.line1(d, cwd, p.home, git.branch(cwd), style, last), d1, disp.templates.line1.parts, now, style.clock);
   const width = L.lineWidth(disp, env);
   const line1 = L.fitLine1(width, disp.templates.line1, v1, style, disp.separator);
   // A valid template can still render blank for this payload; the status line always needs a line 1.

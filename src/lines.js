@@ -13,18 +13,23 @@ const oneLine = F.oneLine;
 const HOUR = 3600e3;
 
 const FIELDS = {
-  line1: ['dir', 'dir.full', 'dir.name', 'branch', 'model', 'model.name', 'effort', 'ctx', 'session'],
+  line1: ['dir', 'dir.full', 'dir.name', 'branch', 'model', 'model.name', 'effort', 'ctx', 'session', 'cost', 'turn.cost', 'turn.ctx'],
   label: ['label'],
   account: ['5h', '5h.reset', '5h.pace', '7d', '7d.pace', '7d.reset', '7d.model', '7d.model.reset', 'spend', 'spend.reset', 'age', 'status'],
   subagent: ['type', 'activity', 'model', 'model.name', 'effort', 'ctx', 'tokens', 'elapsed'],
+  turn: ['duration', 'ctx', 'ctx.total', 'ctx.pct', 'in', 'out', 'cacheRead', 'cacheWrite', 'hit', 'thinking', 'calls', 'tools',
+    'lines.added', 'lines.removed', 'cost', 'note'],
 };
 
 // Today's status line, character for character.
 const DEFAULT_TEMPLATES = {
-  line1: 'dir:{dir}[ ({branch})]{sep}[model:{model.name}]{sep}[effort:{effort}]{sep}[ctx: {ctx}]{sep}[session:{session}]',
+  line1: 'dir:{dir}[ ({branch})]{sep}[model:{model.name}]{sep}[effort:{effort}]{sep}[ctx: {ctx}]{sep}[session:{session}]{sep}[cost:{cost}]',
   label: '\\[{label}\\] ',
   account: '[5h: {5h}, {5h.reset}]{sep}[7d: {7d} / {7d.pace}, {7d.reset}]{sep}[spend: {spend}, {spend.reset}][{status}][  {age}]',
   subagent: '[{type}  ]{activity}{sep}[model:{model.name}]{sep}[effort:{effort}]{sep}[ctx: {ctx}]{sep}[tokens:{tokens}]{sep}[{elapsed}]',
+  // The line the Stop hook prints under each response (turn.js), when the turn line is on.
+  turn: '[ctx {ctx}]{sep}[in {in}]{sep}[out {out}]{sep}[cache {cacheRead} read / {cacheWrite} write][ ({hit} hit)]' +
+    '{sep}[{calls}]{sep}[{tools}]{sep}[+{lines.added} −{lines.removed} lines]{sep}[{cost}]{sep}[{note}]',
 };
 
 const DEFAULT_DISPLAY = {
@@ -44,7 +49,7 @@ function defaultDisplay() {
     otherAccounts: true,
     templates: {
       line1: defaultTemplate('line1'), label: defaultTemplate('label'),
-      account: defaultTemplate('account'), subagent: defaultTemplate('subagent'),
+      account: defaultTemplate('account'), subagent: defaultTemplate('subagent'), turn: defaultTemplate('turn'),
     },
     separator: DEFAULT_DISPLAY.separator,
     thresholds: Object.assign({}, DEFAULT_DISPLAY.thresholds),
@@ -69,7 +74,8 @@ function resetValue(resetsAt, withDay, now, style, soonMs, soonRole) {
   return { text: t, role: soonMs > 0 && resetsAt * 1000 - now < soonMs ? soonRole : null };
 }
 
-function line1(d, cwd, home, branch, style) {
+// last: the session's last turn, saved by the turn line (turn.js), or null.
+function line1(d, cwd, home, branch, style, last) {
   const model = d.model || {};
   const cw = d.context_window || {};
   const full = toForward(cwd).replace(/^\/([a-zA-Z])\//, '$1:/').replace(/(.)\/+$/, '$1');
@@ -84,6 +90,10 @@ function line1(d, cwd, home, branch, style) {
     ctx: F.cleanPct(cw.used_percentage, 100) != null ? pctValue(F.cleanPct(cw.used_percentage, 100), style.thresholds.ctx) : null,
     session: cw.total_input_tokens != null && cw.total_output_tokens != null
       ? plain(F.formatTokens(cw.total_input_tokens + cw.total_output_tokens) + 'tk') : null,
+    cost: d.cost && typeof d.cost.total_cost_usd === 'number' && isFinite(d.cost.total_cost_usd)
+      ? plain(money(d.cost.total_cost_usd)) : null,
+    'turn.cost': last && typeof last.cost === 'number' ? plain(money(last.cost) + (last.partial ? '+' : '')) : null,
+    'turn.ctx': last ? plain(last.ctx) : null,
   };
 }
 
@@ -143,6 +153,9 @@ function account(u, now, workingDays, style) {
   if (u.age) v.age = { text: '(' + F.formatAge(u.age.seconds) + ' ago)', role: 'dim' };
   return v;
 }
+
+// $4.12, $123
+function money(v) { return v >= 100 ? '$' + Math.round(v) : '$' + v.toFixed(2); }
 
 function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
 
@@ -285,11 +298,19 @@ function sampleLines(display) {
   const accounts = display.otherAccounts
     ? [drawAccount(display, 'A', active, style), drawAccount(display, 'B', other, style)]
     : [drawAccount(display, null, active, style)];
+  const turn = {
+    duration: plain('1m 43s'), ctx: plain('+12.4k (6%)'), 'ctx.total': plain('86k'), 'ctx.pct': plain('43%'), in: plain('2.1k'),
+    out: plain('3.4k'), cacheRead: plain('610k'), cacheWrite: plain('14k'), hit: plain('97%'), thinking: plain('1.2k'),
+    calls: plain('9 calls'), tools: plain('Read 4, Bash 3, Edit 2'), 'lines.added': plain('48'), 'lines.removed': plain('12'),
+    cost: plain('$0.41'), note: null,
+  };
   return [
     drawLine(display.templates.line1, l1, style, display.separator),
   ].concat(accounts, [
     // Claude Code draws the ○; it's here so the sample reads like the agent panel.
     '○ ' + drawLine(display.templates.subagent, sub, style, display.separator),
+    // Shown under each response while the turn line is on.
+    drawLine(display.templates.turn, turn, style, display.separator),
   ]);
 }
 
@@ -298,8 +319,13 @@ function usesModel(tpl) {
   return T.fields(tpl.parts).some(function (f) { return f.name === '7d.model' || f.name === '7d.model.reset'; });
 }
 
+// Only a line 1 that shows the last turn reads its file.
+function usesTurn(tpl) {
+  return T.fields(tpl.parts).some(function (f) { return f.name === 'turn.cost' || f.name === 'turn.ctx'; });
+}
+
 module.exports = {
-  usesModel, FIELDS, DEFAULT_TEMPLATES, DEFAULT_DISPLAY, defaultDisplay,
-  line1, account, subagent, modelName, withPassThrough, drawLine, drawAccount, sampleLines,
+  usesModel, usesTurn, FIELDS, DEFAULT_TEMPLATES, DEFAULT_DISPLAY, defaultDisplay,
+  line1, account, subagent, modelName, money, withPassThrough, drawLine, drawAccount, sampleLines,
   lineWidth, fitLine1, fitAccounts,
 };

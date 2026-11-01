@@ -1,6 +1,6 @@
 'use strict';
 // Claude Code's settings.json: point statusLine and subagentStatusLine at our launcher,
-// and undo it. Every write is preceded by a timestamped backup; invalid JSON is never touched.
+// add or remove the turn line's Stop hook, and undo it all. Every write is preceded by a timestamped backup; invalid JSON is never touched.
 
 const fs = require('fs');
 const { UserError, readJson, writeJsonAtomic, timestamp } = require('./fsutil');
@@ -51,6 +51,43 @@ function subagentCommand(p) { return command(p) + ' subagents'; }
 
 function isOursSubagent(v, p) {
   return isOurs(v, p) && /\ssubagents\s*$/.test(v.command);
+}
+
+// The turn line (turn.js) is a Stop hook running "launch.js turn", next to the user's own hooks.
+function turnCommand(p) { return command(p) + ' turn'; }
+
+function isOursTurn(h, p) {
+  return !!(h && h.type === 'command' && isOurs(h, p) && /\sturn\s*$/.test(h.command));
+}
+
+function isTurnOn(s, p) {
+  const stop = s && s.hooks && Array.isArray(s.hooks.Stop) ? s.hooks.Stop : [];
+  return stop.some(function (g) { return g && Array.isArray(g.hooks) && g.hooks.some(function (h) { return isOursTurn(h, p); }); });
+}
+
+// Takes our hook out of s; a group, Stop list or hooks object left empty goes too. True if it was there.
+function dropTurn(s, p) {
+  if (!isTurnOn(s, p)) return false;
+  s.hooks.Stop = s.hooks.Stop.map(function (g) {
+    if (!g || !Array.isArray(g.hooks)) return g;
+    return Object.assign({}, g, { hooks: g.hooks.filter(function (h) { return !isOursTurn(h, p); }) });
+  }).filter(function (g) { return !(g && Array.isArray(g.hooks) && g.hooks.length === 0); });
+  if (!s.hooks.Stop.length) delete s.hooks.Stop;
+  if (!Object.keys(s.hooks).length) delete s.hooks;
+  return true;
+}
+
+function setTurn(p, on) {
+  const s = read(p);
+  if (isTurnOn(s, p) === on) return { changed: false, turn: on };
+  if (on) {
+    if (!s.hooks || typeof s.hooks !== 'object' || Array.isArray(s.hooks)) s.hooks = {};
+    if (!Array.isArray(s.hooks.Stop)) s.hooks.Stop = [];
+    s.hooks.Stop.push({ hooks: [{ type: 'command', command: turnCommand(p), timeout: 10 }] });
+  } else {
+    dropTurn(s, p);
+  }
+  return { changed: true, backup: write(p, s), turn: on };
 }
 
 // install.json keeps what init replaced, so uninstall can put it back. Re-running init
@@ -156,11 +193,12 @@ function restore(p) {
     else s.subagentStatusLine = prevSub;
     changed = true;
   }
+  if (dropTurn(s, p)) { r.turnRemoved = true; changed = true; }
   if (changed) r.backup = write(p, s);
   return r;
 }
 
 module.exports = {
   DEFAULT_REFRESH_INTERVAL, read, command, subagentCommand, isOurs, isOursSubagent, parseInterval,
-  install, setRefreshInterval, restore,
+  install, setRefreshInterval, restore, turnCommand, isOursTurn, isTurnOn, setTurn,
 };

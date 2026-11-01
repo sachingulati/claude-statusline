@@ -36,6 +36,9 @@ function doctor(p, env, opts) {
         sl ? 'settings.json statusLine runs something else: ' + (sl.command || JSON.stringify(sl)) : 'settings.json has no statusLine',
         'Run /sline:init'));
     }
+    out.push(settings.isTurnOn(s, p)
+      ? check('turnLine', 'ok', 'Turn line is on: a summary line prints under each response')
+      : check('turnLine', 'info', 'Turn line is off (/sline:config turnLine on shows a summary line under each response)'));
     const sub = s.subagentStatusLine;
     if (settings.isOursSubagent(sub, p)) out.push(check('subagentStatusLine', 'ok', 'settings.json runs the SLine subagent rows'));
     else if (sub === undefined) {

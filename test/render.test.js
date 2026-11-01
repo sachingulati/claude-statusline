@@ -499,3 +499,19 @@ test('hidden: usage pass-through fields on line 1 are empty too', () => {
     assert.equal(run(), 'claude-opus-5-5 · fix');
   } finally { t.cleanup(); }
 });
+
+test('render records the cost after each reply, and line 1 can show the session cost and the last turn', () => {
+  const { t, proj } = twoAccounts();
+  try {
+    writeJson(t.p.configFile, { accounts: [{ label: 'A', credsDir: t.p.claudeDir }],
+      display: { line1: '{model}{sep}[cost:{cost}]{sep}[last:{turn.cost}]{sep}[{turn.ctx}]' } });
+    writeJson(path.join(t.p.sessionsDir, 's1.last.json'), { cost: 0.41, partial: false, ctx: '+12.4k (6%)' });
+    const d = payload(proj, { session_id: 's1', cost: { total_cost_usd: 4.12, total_lines_added: 5, total_lines_removed: 1 },
+      context_window: { used_percentage: 12, context_window_size: 200000,
+        current_usage: { input_tokens: 2, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300, output_tokens: 40 } } });
+    const out = stripAnsi(render.render(d, { env: t.env, now: NOW, spawn: () => {} })).split('\n');
+    assert.equal(out[0], 'claude-opus-5-5 · cost:$4.12 · last:$0.41 · +12.4k (6%)');
+    const h = JSON.parse(fs.readFileSync(path.join(t.p.sessionsDir, 's1.cost.json'), 'utf8'));
+    assert.deepEqual(h, { window: 200000, h: [{ s: '2,9000,300', c: 4.12, la: 5, lr: 1, t: NOW }] });
+  } finally { t.cleanup(); }
+});

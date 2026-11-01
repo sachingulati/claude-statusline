@@ -36,6 +36,17 @@ test('line1 values', () => {
   assert.deepEqual(Object.keys(v).sort(), L.FIELDS.line1.slice().sort());
 });
 
+test('line1 cost: the session total; turn.cost and turn.ctx from the last turn', () => {
+  const { s } = style();
+  const v = L.line1({ cost: { total_cost_usd: 4.123 } }, '/x', '/home/me', '', s, { cost: 0.38, partial: true, ctx: '+12.4k (6%)' });
+  assert.equal(v.cost.text, '$4.12');
+  assert.equal(v['turn.cost'].text, '$0.38+');
+  assert.equal(v['turn.ctx'].text, '+12.4k (6%)');
+  assert.equal(L.line1({ cost: { total_cost_usd: 123.4 } }, '/x', '/home/me', '', s).cost.text, '$123');
+  const e = L.line1({}, '/x', '/home/me', '', s, null);
+  for (const k of ['cost', 'turn.cost', 'turn.ctx']) assert.equal(e[k], null, k);
+});
+
 test('account values: default thresholds, pace rule and reset windows', () => {
   const { s } = style();
   const v = L.account({
@@ -120,9 +131,11 @@ test('drawAccount is empty when the account body renders empty, even with a labe
 test('sampleLines renders plain text through the current templates and clock', () => {
   const d = L.defaultDisplay();
   const lines = L.sampleLines(d);
-  assert.equal(lines.length, 4);
+  assert.equal(lines.length, 5);
   assert.equal(lines[3], '○ general-purpose  Reading fsutil.js · model:Haiku 4.5 · ctx: 16% · tokens:32.4k · 1m42s');
-  assert.equal(lines[0], 'dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk');
+  assert.equal(lines[0], 'dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk · cost:$1.23');
+  assert.equal(lines[4], 'ctx +12.4k (6%) · in 2.1k · out 3.4k · cache 610k read / 14k write (97% hit) · 9 calls · ' +
+    'Read 4, Bash 3, Edit 2 · +48 −12 lines · $0.41');
   assert.match(lines[1], /^\[A\] 5h: 52%, 23:49 · 7d: 38% \/ \d+%, Mon 17:29$/);
   assert.match(lines[2], /^\[B\] 5h: 29%, 01:00 · 7d: 28% \/ \d+%, Mon 17:29 {2}\(3m ago\)$/);
   assert.ok(!/\x1b/.test(lines.join('')));

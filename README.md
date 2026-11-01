@@ -3,15 +3,16 @@
 A [Claude Code](https://claude.com/claude-code) plugin that shows **rate limits for every Claude
 account you use** in the status line: live for this session's account, and as last recorded or
 checked for your others, a pace-aware weekly figure, and one command to show or hide the usage
-numbers.
+numbers. Line 1 shows the session's cost, and an optional line under each response sums up the
+turn: context added, tokens, tools and cost.
 
 ```
-dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk
+dir:~/projects/app (main) · model:Opus 5.5 · effort:high · ctx: 12% · session:340.0ktk · cost:$1.23
 [A] 5h: 52%, 23:49 · 7d: 38% / 61%, Mon 17:29
 [B] 5h: 0%, --:-- · 7d: 81% / 58%, Mon 23:29  (3m ago)
 ```
 
-- **Line 1**: folder and git branch, model, effort, context used, this session's tokens.
+- **Line 1**: folder and git branch, model, effort, context used, this session's tokens and cost.
 - **Line 2**: the account this session uses, live from Claude Code.
 - **Line 3+**: your other accounts, as last recorded by their own sessions on this machine, or
   checked through Claude Code in the background when those numbers are more than 30 minutes old.
@@ -24,6 +25,12 @@ then its own stats:
 
 ```
 ○ general-purpose  Reading fsutil.js · model:Haiku 4.5 · ctx: 16% · tokens:32.4k · 1m42s
+```
+
+With the turn line on (`/sline:config turnLine on`), a line under each response sums up that turn:
+
+```
+ctx +12.4k (6%) · in 2.1k · out 3.4k · cache 610k read / 14k write (97% hit) · 9 calls · Read 4, Bash 3, Edit 2 · +48 −12 lines · $0.41
 ```
 
 ## Requirements
@@ -147,6 +154,29 @@ Start one session with it (e.g. `claudeb`) and it appears as the next letter as 
 becomes `A`. Rename or forget accounts with `/sline:config`.
 The status line detects which account a session uses from the same variable.
 
+## The turn line
+
+Off by default. `/sline:config turnLine on` adds a Stop hook to `~/.claude/settings.json` (after a
+backup, next to your own hooks), and `turnLine off` takes it away. Every figure is the session's own,
+so sessions running side by side never mix:
+
+- **`ctx +12.4k (6%)`**: how much the turn added to the context, and its share of the window. A
+  first turn, or one right after `/compact`, shows the size it starts with; a compaction during
+  the turn shows `compacted`.
+- **tokens**: input, output, cache reads and writes, and the cache hit ratio, over the turn's
+  API calls; then the tool calls, most used first, and the lines added and removed.
+- **cost**: Claude Code's own session cost, before and after the turn. A reply the status line
+  hasn't seen yet when the turn ends is priced at the rate measured on earlier replies of the
+  same model; with no rate yet, the cost shows what is known followed by `+`. On a Pro or Max
+  plan this is what the turn would cost on the API, not what you pay.
+
+The hook runs Node on your machine and makes no model call, so it costs no tokens or quota.
+Change what it shows with `/sline:config` like any other line (`display.turn`); its fields are
+`duration`, `ctx`, `ctx.total`, `ctx.pct`, `in`, `out`, `cacheRead`, `cacheWrite`, `hit`,
+`thinking`, `calls`, `tools`, `lines.added`, `lines.removed`, `cost` and `note` (`duration`, the
+time since the prompt, is left out by default because Claude Code shows it). Line 1 can show
+the last turn too, with `{turn.cost}` and `{turn.ctx}`.
+
 ## Reading the status line
 
 | Colour | Meaning |
@@ -184,8 +214,10 @@ changes the expected burn-down.
   It uses no model turns and no quota, and runs at most once per account every 30 minutes.
   `/sline:config fetch.otherAccounts false` turns that off.
 - `/sline:init` writes to `~/.claude/settings.json`: it sets `statusLine` and
-  `subagentStatusLine`, after backing the file up. `/sline:uninstall` puts your previous
-  values back.
+  `subagentStatusLine`, after backing the file up. `/sline:config turnLine on` adds the turn line's
+  Stop hook the same way. `/sline:uninstall` puts your previous values back and removes the hook.
+- The turn line reads the session's transcript to count its tokens and tools, and keeps each
+  session's cost after every reply under `~/.claude/sline/sessions/`.
 
 ## Development
 

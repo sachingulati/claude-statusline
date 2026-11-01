@@ -5,7 +5,7 @@
 //   node cli/sl.js <command> [args] [--json]
 //
 //   init [--refresh N]                 set up settings.json, launcher, pointer
-//   config show | set <key> <value> | reset display | account list | account add <label> <dir>
+//   config show | set <key> <value> | set turnLine on|off | reset display | account list | account add <label> <dir>
 //          | account rename <label> <new> | account forget <label>
 //   usage [hide|show|active|all|reset] usage visibility and which accounts show (bare = report)
 //   fields                             template fields: sline's and Claude Code's
@@ -96,6 +96,13 @@ function cmdUsage() {
   };
 }
 
+function parseOnOff(v) {
+  const s = String(v).toLowerCase();
+  if (['on', 'true', 'yes', '1'].includes(s)) return true;
+  if (['off', 'false', 'no', '0'].includes(s)) return false;
+  throw new UserError('Expected on or off, got "' + v + '"');
+}
+
 function accountsText(list) {
   return list.map(function (a) {
     return '  ' + (a.label || '(default)').padEnd(10) + a.credsDir + (a.recorded ? '' : '  (no usage recorded yet)');
@@ -112,6 +119,9 @@ function cmdConfig() {
     r.rows.push(ri != null
       ? { key: 'refreshInterval', value: ri, origin: 'settings.json' }
       : { key: 'refreshInterval', value: settings.DEFAULT_REFRESH_INTERVAL, origin: 'default' });
+    let turnOn = false;
+    try { turnOn = settings.isTurnOn(settings.read(p), p); } catch (e) { turnOn = false; }
+    r.rows.push(turnOn ? { key: 'turnLine', value: 'on', origin: 'settings.json' } : { key: 'turnLine', value: 'off', origin: 'default' });
     return {
       data: r,
       // A value too long for its column (a template) still gets two spaces before the origin.
@@ -134,6 +144,15 @@ function cmdConfig() {
     if (key === 'refreshInterval') {
       const r = settings.setRefreshInterval(p, value);
       return { data: r, text: 'refreshInterval = ' + r.refreshInterval };
+    }
+    if (key === 'turnLine') {
+      const on = parseOnOff(value);
+      const r = settings.setTurn(p, on);
+      return {
+        data: { turnLine: on ? 'on' : 'off', changed: r.changed, backup: r.backup || null },
+        text: (on ? 'Turn line on: a summary line prints under each response, from the next turn' : 'Turn line off') +
+          (r.changed ? '' : ' (already)') + (r.backup ? '\nBackup: ' + r.backup : ''),
+      };
     }
     const v = config.set(p, key, value);
     const data = { key: key, value: v };
@@ -207,6 +226,7 @@ function cmdUninstall() {
       r.leftAlone ? 'settings.json statusLine was changed since init; left as is'
         : r.restored ? 'Restored your previous status line' : 'Removed the status line from settings.json',
       r.subagentLeftAlone ? 'settings.json subagentStatusLine was changed since init; left as is' : '',
+      r.turnRemoved ? 'Removed the turn line\'s Stop hook' : '',
       r.backup ? 'Backup: ' + r.backup : '',
       purge ? 'Deleted ' + p.stateDir : 'Kept your config and cache in ' + p.stateDir,
       'Next: /plugin uninstall sline@sachingulati',

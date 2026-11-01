@@ -195,3 +195,20 @@ test('subagents mode prints nothing when the plugin is missing, too old, or thro
     assert.equal(runLauncher(t, '{}'), 'line\n'); // the status line itself is unaffected
   } finally { t.cleanup(); }
 });
+
+test('the turn argument prints the turn line through the pointed-to plugin, and nothing on failure', () => {
+  const t = tmpEnv();
+  try {
+    const fake = path.join(t.base, 'fake-plugin');
+    fs.mkdirSync(path.join(fake, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(fake, 'src', 'render.js'), "exports.run = () => 'line\\n';");
+    launcher.sync(t.p, fake);
+    assert.equal(runLauncher(t, '{}', ['turn']), ''); // no turn.js: nothing, not a status line message
+    fs.writeFileSync(path.join(fake, 'src', 'turn.js'), "exports.run = () => '{\"systemMessage\":\"turn: 5s\"}\\n';");
+    assert.equal(runLauncher(t, '{}', ['turn']), '{"systemMessage":"turn: 5s"}\n');
+    fs.writeFileSync(path.join(fake, 'src', 'turn.js'), "exports.run = () => { throw new Error('boom'); };");
+    assert.equal(runLauncher(t, '{}', ['turn']), '');
+    launcher.sync(t.p, path.join(t.base, 'gone'));
+    assert.equal(runLauncher(t, '{}', ['turn']), '');
+  } finally { t.cleanup(); }
+});

@@ -129,7 +129,7 @@ function normalizeDisplay(raw) {
     }
   };
   d.otherAccounts = pick('display.otherAccounts', r.otherAccounts, true);
-  ['line1', 'label', 'account', 'subagent'].forEach(function (w) { d.templates[w] = loadTemplate(w, r[w], d.problems); });
+  ['line1', 'label', 'account', 'subagent', 'turn'].forEach(function (w) { d.templates[w] = loadTemplate(w, r[w], d.problems); });
   d.separator = pick('display.separator', r.separator, d.separator);
   const th = r.thresholds && typeof r.thresholds === 'object' ? r.thresholds : {};
   Object.keys(d.thresholds).forEach(function (k) { d.thresholds[k] = pick('display.thresholds.' + k, th[k], d.thresholds[k]); });
@@ -251,6 +251,7 @@ const KEYS = {
   'display.label': { parse: templateKey('label'), def: L.DEFAULT_TEMPLATES.label },
   'display.account': { parse: templateKey('account'), def: L.DEFAULT_TEMPLATES.account },
   'display.subagent': { parse: templateKey('subagent'), def: L.DEFAULT_TEMPLATES.subagent },
+  'display.turn': { parse: templateKey('turn'), def: L.DEFAULT_TEMPLATES.turn },
   'display.separator': { parse: parseSeparator, def: L.DEFAULT_DISPLAY.separator },
   'display.thresholds.7dPace': { parse: parseBool, def: L.DEFAULT_DISPLAY.thresholds['7dPace'] },
   'display.thresholds.5hPace': { parse: parseBool, def: L.DEFAULT_DISPLAY.thresholds['5hPace'] },
@@ -284,7 +285,7 @@ function set(p, key, value) {
   const spec = KEYS[key];
   if (!spec) {
     throw new UserError('Unknown setting "' + key + '"',
-      'Settable keys: ' + Object.keys(KEYS).concat('refreshInterval').join(', '));
+      'Settable keys: ' + Object.keys(KEYS).concat('refreshInterval', 'turnLine').join(', '));
   }
   const parsed = spec.parse(value);
   const raw = readRaw(p);
@@ -306,7 +307,7 @@ function show(p) {
   const rows = Object.keys(KEYS).map(function (key) {
     const v = getPath(raw, key);
     if (v === undefined) return { key: key, value: KEYS[key].def, origin: 'default' };
-    const tpl = /^display\.(line1|label|account|subagent)$/.test(key);
+    const tpl = /^display\.(line1|label|account|subagent|turn)$/.test(key);
     const parsed = tpl ? (T.parse(v).error ? undefined : v) : tryParse(key, v);
     return parsed !== undefined
       ? { key: key, value: parsed, origin: 'config.json' }
