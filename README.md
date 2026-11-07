@@ -2,8 +2,8 @@
 
 A [Claude Code](https://claude.com/claude-code) plugin that shows **rate limits for every Claude
 account you use** in the status line: live for this session's account, and as last recorded or
-checked for your others, a pace-aware weekly figure, and one command to show or hide the usage
-numbers. Line 1 shows the session's cost, and an optional line under each response sums up the
+checked for your others, a pace-aware weekly figure, which account has the most room left, and
+one command to show or hide the usage numbers. Line 1 shows the session's cost, and an optional line under each response sums up the
 turn: context added, tokens, tools and cost.
 
 ```
@@ -153,6 +153,10 @@ alias claudeb='CLAUDE_SECURESTORAGE_CONFIG_DIR="$HOME/.creds-b" command claude'
 Start one session with it (e.g. `claudeb`) and it appears as the next letter as soon as the status line draws; your default login
 becomes `A`. Rename or forget accounts with `/sline:config`.
 The status line detects which account a session uses from the same variable.
+
+To pick the account with the most room left - for a script that starts a session, say - ask
+`/sline:quota`, or run `node cli/sl.js quota --best` (add `--json` for the numbers). It prints the
+account whose worse window, 5-hour or 7-day, is the least used, among accounts with usage recorded.
 
 ## The turn line
 

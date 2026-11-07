@@ -57,10 +57,17 @@ function formatResetTime(resetsAt, withDay, now, clock) {
   return DAYS[d.getDay()] + ' ' + hm;
 }
 
+const TOKEN_TIERS = [[1e3, 1, 'k'], [1e6, 2, 'M'], [1e9, 2, 'B']];
+
+// 340.0k, 1.23M, 1.25B. A value that rounds up to 1000 in its tier moves to the
+// next one (999,960 -> 1.00M, not 1000.0k): the test uses the printed digits.
 function formatTokens(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
-  return String(n);
+  if (n < 1e3) return String(n);
+  for (let i = 0; i < TOKEN_TIERS.length; i++) {
+    const [div, digits, unit] = TOKEN_TIERS[i];
+    const s = (n / div).toFixed(digits);
+    if (Number(s) < 1000 || i === TOKEN_TIERS.length - 1) return s + unit;
+  }
 }
 
 // Milliseconds between two instants that fall on a working day, walking local days.

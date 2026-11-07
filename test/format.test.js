@@ -25,11 +25,32 @@ test('formatTokens and formatAge', () => {
   assert.equal(F.formatTokens(340000), '340.0k');
   assert.equal(F.formatTokens(1234567), '1.23M');
   assert.equal(F.formatTokens(999), '999');
+  assert.equal(F.formatTokens(1.25e9), '1.25B');
   assert.equal(F.formatAge(42), '42s');
   assert.equal(F.formatAge(180), '3m');
   assert.equal(F.formatAge(3 * 3600 + 5 * 60), '3h5m');
   assert.equal(F.formatAge(3 * 86400), '3d');
   assert.equal(F.formatAge(26 * 3600 + 10 * 60), '1d2h');
+});
+
+test('formatTokens: tier boundaries never print a rounded-up 1000', () => {
+  const cases = [
+    [0, '0'],
+    [999, '999'],
+    [1000, '1.0k'],
+    [999949, '999.9k'],
+    [999950, '1.00M'], // would round to 1000.0k
+    [999960, '1.00M'],
+    [999999, '1.00M'],
+    [1e6, '1.00M'],
+    [999994999, '999.99M'],
+    [999995000, '1.00B'], // would round to 1000.00M
+    [999999999, '1.00B'],
+    [1e9, '1.00B'],
+    [1.25e9, '1.25B'],
+    [12345678901, '12.35B'],
+  ];
+  for (const [n, want] of cases) assert.equal(F.formatTokens(n), want, `formatTokens(${n})`);
 });
 
 test('displayPath shows ~ for home and below, in any slash or drive form', () => {

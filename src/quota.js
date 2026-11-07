@@ -32,4 +32,23 @@ function quota(p, env, now) {
   });
 }
 
-module.exports = { quota };
+// The account with the most headroom: the lowest max(5-hour %, 7-day %) among accounts with
+// cached usage (a missing window counts as unknown, not 0). First in config order on a tie.
+// Returns null when no account has any.
+function best(list) {
+  let pick = null;
+  let pickWorst = Infinity;
+  list.forEach(function (a) {
+    const used = [a.fiveHour, a.sevenDay].filter(Boolean).map(function (w) { return w.usedPct; });
+    if (!used.length) return;
+    const worst = Math.max.apply(null, used);
+    if (worst < pickWorst) { pick = a; pickWorst = worst; }
+  });
+  return pick && {
+    label: pick.label,
+    five_hour: pick.fiveHour ? pick.fiveHour.usedPct : null,
+    seven_day: pick.sevenDay ? pick.sevenDay.usedPct : null,
+  };
+}
+
+module.exports = { quota, best };

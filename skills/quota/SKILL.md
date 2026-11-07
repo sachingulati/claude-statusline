@@ -16,3 +16,4 @@ Answer the user's question directly from this data:
 - For accounts that aren't active, the numbers are as last recorded by that account's own Claude Code sessions on this machine, or by SLine's background check through Claude Code; say how old they are (`ageSeconds`).
 - `null` usage means no data yet for that account.
 - Give times in the user's local time as provided in `resetsAtLocal`.
+- For which account has the most room left, `quota --best --json` gives the pick: the account whose higher of `fiveHour` and `sevenDay` usage is lowest, among accounts with data.

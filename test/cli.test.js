@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
-const { tmpEnv, writeJson, childEnv } = require('./helpers');
+const { tmpEnv, writeJson, writeCache, childEnv } = require('./helpers');
 
 const CLI = path.join(__dirname, '..', 'cli', 'sl.js');
 
@@ -95,6 +95,41 @@ test('quota and doctor return JSON; doctor exits 1 when something fails', () => 
     const d = sl(t, ['doctor', '--json']);
     assert.equal(d.code, 1);
     assert.ok(d.json.result.checks.some(c => c.id === 'statusLine' && c.level === 'fail'));
+  } finally { t.cleanup(); }
+});
+
+test('quota --best picks the lowest max(5h, 7d), skipping accounts with no cached usage', () => {
+  const t = tmpEnv();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    writeJson(t.p.configFile, { accounts: [
+      { label: 'A', credsDir: t.p.claudeDir }, { label: 'B', credsDir: '~/.creds-b' },
+      { label: 'C', credsDir: '~/.creds-c' }, { label: 'D', credsDir: '~/.creds-d' }] });
+    const rec = (five, seven) => ({ status: 'ok', fetched_at: now - 60,
+      five_hour: { utilization: five, resets_at: now + 3600 }, seven_day: { utilization: seven, resets_at: now + 3 * 86400 } });
+    // A has nothing cached; B's worst is 80; C's worst is 40 (5h low, week high wins); D's worst is 50.
+    writeCache(t.p, 'B', rec(80, 10));
+    writeCache(t.p, 'C', rec(5, 40));
+    writeCache(t.p, 'D', rec(50, 20));
+
+    const r = sl(t, ['quota', '--best']);
+    assert.equal(r.code, 0);
+    assert.equal(r.out.trim(), 'C');
+    assert.deepEqual(sl(t, ['quota', '--best', '--json']).json.result, { label: 'C', five_hour: 5, seven_day: 40 });
+  } finally { t.cleanup(); }
+});
+
+test('quota --best with no cached usage is exit 1 with a clear message', () => {
+  const t = tmpEnv();
+  try {
+    const r = sl(t, ['quota', '--best']);
+    assert.equal(r.code, 1);
+    assert.equal(r.out, '');
+    assert.match(r.err, /No account has cached usage/);
+    const j = sl(t, ['quota', '--best', '--json']);
+    assert.equal(j.code, 1);
+    assert.equal(j.json.ok, false);
+    assert.match(j.json.error, /No account has cached usage/);
   } finally { t.cleanup(); }
 });
 

@@ -9,7 +9,8 @@
 //          | account rename <label> <new> | account forget <label>
 //   usage [hide|show|active|all|reset] usage visibility and which accounts show (bare = report)
 //   fields                             template fields: sline's and Claude Code's
-//   quota                            every account's usage from the cache
+//   quota [--best]                     every account's usage from the cache; --best: the label
+//                                      with the lowest max(5h %, 7d %) (exit 1 if none cached)
 //   doctor                             health checks (exit 1 if any fail)
 //   uninstall [--purge]                restore settings.json, remove launcher
 
@@ -193,6 +194,12 @@ function cmdConfig() {
 
 function cmdQuota() {
   const r = quota.quota(p, process.env, Date.now());
+  if (args.includes('--best')) {
+    const b = quota.best(r);
+    if (!b) throw new UserError('No account has cached usage yet, so there is no best account to pick',
+      'Use Claude Code in each account once so its usage is recorded, then run quota again');
+    return { data: b, text: b.label };
+  }
   return {
     data: r,
     text: r.map(function (a) {

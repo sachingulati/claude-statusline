@@ -47,3 +47,13 @@ test('quota rolls a record past its resets', () => {
     assert.deepEqual([q.sevenDay.usedPct, q.sevenDay.resetsAt], [0, NOW_S - 60 + 7 * 86400]);
   } finally { t.cleanup(); }
 });
+
+test('best: a missing window is unknown, not 0; a tie keeps config order; nothing cached is null', () => {
+  const acct = (label, five, seven) => ({ label,
+    fiveHour: five == null ? null : { usedPct: five }, sevenDay: seven == null ? null : { usedPct: seven } });
+  assert.deepEqual(quota.best([acct('A', null, null), acct('B', 30, null), acct('C', 10, 35)]),
+    { label: 'B', five_hour: 30, seven_day: null });
+  assert.equal(quota.best([acct('A', 20, 20), acct('B', 20, 5)]).label, 'A');
+  assert.equal(quota.best([acct('A', null, null)]), null);
+  assert.equal(quota.best([]), null);
+});
